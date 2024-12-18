@@ -123,7 +123,8 @@ new_conn(
             ),
             receive
                 {CtrlPid, stream_acceptor_ready} ->
-                    ok = quicer:async_handshake(Conn),
+                    %% Apply latest config during handshake
+                    ok = quicer:async_handshake(Conn, S),
                     {ok, S#{conn := Conn, ctrl_pid := CtrlPid}};
                 {'EXIT', _Pid, _Reason} ->
                     {stop, stream_accept_error, S}
