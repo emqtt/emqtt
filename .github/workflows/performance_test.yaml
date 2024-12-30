@@ -25,7 +25,7 @@ jobs:
 
     steps:
     - name: Checkout tf-emqx-performance-test
-      uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938 # v4.2.0
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         repository: emqx/tf-emqx-performance-test
         ref: v0.3.2
@@ -103,7 +103,7 @@ jobs:
         set -e
         echo "ssh_key_path=$(terraform output -raw ssh_key_path)" >> $GITHUB_OUTPUT
 
-    - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+    - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
       if: success()
       with:
         name: ssh_private_key
@@ -223,7 +223,7 @@ jobs:
 
     - name: Post to Slack
       if: failure()
-      uses: slackapi/slack-github-action@v1.27.0
+      uses: slackapi/slack-github-action@v2.0.0
       env:
         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       with:
@@ -232,7 +232,7 @@ jobs:
         payload-file-path: slack-payload.json
         payload-file-path-parsed: false
 
-    - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+    - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
       if: failure()
       with:
         name: terraform

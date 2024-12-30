@@ -37,7 +37,7 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       skip: ${{ steps.matrix.outputs.skip }}
     steps:
-    - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938 # v4.2.0
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         fetch-depth: 0
     - name: prepare test matrix
@@ -72,7 +72,7 @@ jobs:
       run:
         shell: bash
     steps:
-    - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938 # v4.2.0
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         fetch-depth: 0
     - name: run
@@ -98,7 +98,7 @@ jobs:
     - name: compress logs
       if: failure()
       run: tar -czf logs.tar.gz apps/emqx/_build/{,standalone_test+}test/logs || true
-    - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+    - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
       if: failure()
       with:
         name: logs-emqx-app-tests-${{ matrix.type }}

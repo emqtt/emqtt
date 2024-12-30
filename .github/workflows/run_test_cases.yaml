@@ -130,7 +130,7 @@ jobs:
         if: failure()
         run: tar -czf logs.tar.gz _build/test/logs
 
-      - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: failure()
         with:
           name: logs-${{ matrix.profile }}-${{ matrix.prefix }}-sg${{ matrix.suitegroup }}
@@ -187,7 +187,7 @@ jobs:
         if: failure()
         run: tar -czf logs.tar.gz _build/test/logs
 
-      - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: failure()
         with:
           name: logs-${{ matrix.profile }}-${{ matrix.prefix }}-sg${{ matrix.suitegroup }}
@@ -210,7 +210,7 @@ jobs:
     steps:
       - name: Coveralls finished
         if: github.repository == 'emqx/emqx'
-        uses: coverallsapp/github-action@643bc377ffa44ace6394b2b5d0d3950076de9f63 # v2.3.0
+        uses: coverallsapp/github-action@cfd0633edbd2411b532b808ba7a8b5e04f76d2c8 # v2.3.4
         with:
           parallel-finished: true
           git-branch: ${{ github.ref }}
