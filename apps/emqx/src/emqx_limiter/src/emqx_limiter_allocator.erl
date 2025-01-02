@@ -222,12 +222,27 @@ do_buckets_alloc(Buckets, Elapsed) ->
         Buckets
     ).
 
-do_bucket_alloc(#{rate := Rate, correction := Correction} = Bucket, Elapsed) ->
-    Inc = Rate * Elapsed + Correction,
-    Inc2 = erlang:floor(Inc),
-    Correction2 = Inc - Inc2,
-    add_tokens(Bucket, Inc2),
-    Bucket#{correction := Correction2}.
+do_bucket_alloc(
+    #{
+        rate := Rate,
+        correction := Correction,
+        counter := Counter,
+        index := Index,
+        capacity := Capacity
+    } = Bucket,
+    Elapsed
+) ->
+    Val = counters:get(Counter, Index),
+    case Val >= Capacity of
+        true ->
+            Bucket;
+        _ ->
+            Inc = Rate * Elapsed + Correction,
+            Inc2 = erlang:floor(Inc),
+            Correction2 = Inc - Inc2,
+            add_tokens(Bucket, Inc2),
+            Bucket#{correction := Correction2}
+    end.
 
 set_tokens(Counter, Ix, Tokens) ->
     counters:put(Counter, Ix, erlang:floor(Tokens)).

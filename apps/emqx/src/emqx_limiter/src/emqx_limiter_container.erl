@@ -116,7 +116,7 @@ do_check_limiters(_, [], Container, Acc) ->
 
 do_restore([{Index, Consumed} | Indexes], Container) ->
     Limiter = maps:get(Index, Container),
-    Limiter2 = emqx_limiter:restore(Limiter, Consumed),
+    Limiter2 = emqx_limiter:restore(Consumed, Limiter),
     do_restore(Indexes, Container#{Index := Limiter2});
 do_restore([], Container) ->
     Container.

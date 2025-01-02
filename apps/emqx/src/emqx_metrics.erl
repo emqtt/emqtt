@@ -56,7 +56,8 @@
 -export([
     inc_msg/1,
     inc_recv/1,
-    inc_sent/1
+    inc_sent/1,
+    inc_quota_exceeded/1
 ]).
 
 %% gen_server callbacks
@@ -346,6 +347,11 @@ do_inc_sent(?PACKET(?AUTH)) ->
 do_inc_sent(_Packet) ->
     ok.
 
+inc_quota_exceeded(QoS) ->
+    inc('packets.publish.quota_exceeded'),
+    QoS =:= ?QOS_0 andalso emqx_metrics:inc('packets.publish.dropped'),
+    ok.
+
 %%--------------------------------------------------------------------
 %% gen_server callbacks
 %%--------------------------------------------------------------------
@@ -469,6 +475,7 @@ reserved_idx('packets.disconnect.sent') -> 46;
 reserved_idx('packets.auth.received') -> 47;
 reserved_idx('packets.auth.sent') -> 48;
 %% reserved_idx('packets.publish.dropped') -> 49; %% deprecated; new metrics may use this index.
+reserved_idx('packets.publish.quota_exceeded') -> 50;
 %% Reserved indices of message's metrics
 reserved_idx('messages.received') -> 100;
 reserved_idx('messages.sent') -> 101;

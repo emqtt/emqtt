@@ -43,12 +43,13 @@
 
 -spec create(emqx_config:config()) -> limiter().
 create(#{rate := Rate, burst := Burst}) ->
+    Capacity = emqx_limiter:calc_capacity(Rate),
     #{
         module => ?MODULE,
-        tokens => Rate,
+        tokens => Capacity,
         rate => Rate,
         burst => Burst,
-        capacity => emqx_limiter:calc_capacity(Rate),
+        capacity => Capacity,
         lasttime => ?NOW
     }.
 

@@ -487,7 +487,7 @@ t_process_unsubscribe(_) ->
 t_quota_qos0(_) ->
     {ok, Rate} = emqx_limiter_schema:to_rate("1/s"),
     emqx_limiter_allocator:add_bucket(messages, #{rate => Rate, burst => 0}),
-    timer:sleep(1000),
+    timer:sleep(1200),
     ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 4}}] end),
     Chann = channel(#{conn_state => connected, quota => quota()}),
     Pub = ?PUBLISH_PACKET(?QOS_0, <<"topic">>, undefined, <<"payload">>),
@@ -497,7 +497,7 @@ t_quota_qos0(_) ->
     {ok, Chann1} = emqx_channel:handle_in(Pub, Chann),
     {ok, Chann2} = emqx_channel:handle_in(Pub, Chann1),
     ?assertEqual(M1 + 1, emqx_metrics:val(Metric)),
-    timer:sleep(1000),
+    timer:sleep(1200),
     {ok, _} = emqx_channel:handle_in(Pub, Chann2),
     %% No longer exceeds quota
     ?assertEqual(M1 + 1, emqx_metrics:val(Metric)),
@@ -507,14 +507,14 @@ t_quota_qos0(_) ->
 t_quota_qos1(_) ->
     {ok, Rate} = emqx_limiter_schema:to_rate("1/s"),
     emqx_limiter_allocator:add_bucket(messages, #{rate => Rate, burst => 0}),
-    timer:sleep(1000),
+    timer:sleep(1200),
     ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 4}}] end),
     Chann = channel(#{conn_state => connected, quota => quota()}),
     Pub = ?PUBLISH_PACKET(?QOS_1, <<"topic">>, 1, <<"payload">>),
     %% Quota per connections
     {ok, ?PUBACK_PACKET(1, ?RC_SUCCESS), Chann1} = emqx_channel:handle_in(Pub, Chann),
     {ok, ?PUBACK_PACKET(1, ?RC_QUOTA_EXCEEDED), Chann2} = emqx_channel:handle_in(Pub, Chann1),
-    timer:sleep(1000),
+    timer:sleep(1200),
     {ok, ?PUBACK_PACKET(1, ?RC_SUCCESS), Chann3} = emqx_channel:handle_in(Pub, Chann2),
     %% Quota in overall
     {ok, ?PUBACK_PACKET(1, ?RC_QUOTA_EXCEEDED), _} = emqx_channel:handle_in(Pub, Chann3),
@@ -524,7 +524,7 @@ t_quota_qos1(_) ->
 t_quota_qos2(_) ->
     {ok, Rate} = emqx_limiter_schema:to_rate("1/s"),
     emqx_limiter_allocator:add_bucket(messages, #{rate => Rate, burst => 0}),
-    timer:sleep(1000),
+    timer:sleep(1200),
     ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 4}}] end),
     Chann = channel(#{conn_state => connected, quota => quota()}),
     Pub1 = ?PUBLISH_PACKET(?QOS_2, <<"topic">>, 1, <<"payload">>),
@@ -534,7 +534,7 @@ t_quota_qos2(_) ->
     %% Quota per connections
     {ok, ?PUBREC_PACKET(1, ?RC_SUCCESS), Chann1} = emqx_channel:handle_in(Pub1, Chann),
     {ok, ?PUBREC_PACKET(2, ?RC_QUOTA_EXCEEDED), Chann2} = emqx_channel:handle_in(Pub2, Chann1),
-    timer:sleep(1000),
+    timer:sleep(1200),
     {ok, ?PUBREC_PACKET(3, ?RC_SUCCESS), Chann3} = emqx_channel:handle_in(Pub3, Chann2),
     %% Quota in overall
     {ok, ?PUBREC_PACKET(4, ?RC_QUOTA_EXCEEDED), _} = emqx_channel:handle_in(Pub4, Chann3),
@@ -544,14 +544,14 @@ t_quota_qos2(_) ->
 t_quota_bytes(_) ->
     {ok, Rate} = emqx_limiter_schema:to_rate("7/s"),
     emqx_limiter_allocator:add_bucket(bytes, #{rate => Rate, burst => 0}),
-    timer:sleep(1000),
+    timer:sleep(1200),
     ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 4}}] end),
     Chann = channel(#{conn_state => connected, quota => quota()}),
     Pub = ?PUBLISH_PACKET(?QOS_1, <<"topic">>, 1, <<"payload">>),
     %% Quota per connections
     {ok, ?PUBACK_PACKET(1, ?RC_SUCCESS), Chann1} = emqx_channel:handle_in(Pub, Chann),
     {ok, ?PUBACK_PACKET(1, ?RC_QUOTA_EXCEEDED), Chann2} = emqx_channel:handle_in(Pub, Chann1),
-    timer:sleep(1000),
+    timer:sleep(1200),
     {ok, ?PUBACK_PACKET(1, ?RC_SUCCESS), Chann3} = emqx_channel:handle_in(Pub, Chann2),
     %% Quota in overall
     {ok, ?PUBACK_PACKET(1, ?RC_QUOTA_EXCEEDED), _} = emqx_channel:handle_in(Pub, Chann3),
