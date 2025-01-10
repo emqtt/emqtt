@@ -202,7 +202,7 @@ max_publish_rate(#{max_publish_rate := MaxPublishRate}) ->
         infinity ->
             infinity;
         Rate ->
-            round(Rate * ?REFILL_INTERVAL / emqx_limiter_schema:default_period())
+            round(Rate * ?REFILL_INTERVAL)
     end.
 
 with_limiter(Fun) ->

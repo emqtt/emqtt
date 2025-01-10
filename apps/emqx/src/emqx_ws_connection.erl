@@ -89,15 +89,6 @@
     %% Listener Type and Name
     listener :: {Type :: atom(), Name :: atom()},
 
-    %% deprecated
-    limiter :: any(),
-
-    %% deprecated
-    limiter_buffer :: any(),
-
-    %% deprecated
-    limiter_timer :: any(),
-
     %% Extra field for future hot-upgrade support
     extra = []
 }).
@@ -299,7 +290,6 @@ websocket_init([Req, Opts]) ->
                     sockname = Sockname,
                     sockstate = running,
                     mqtt_piggyback = MQTTPiggyback,
-                    limiter = undefined,
                     parse_state = ParseState,
                     serialize = Serialize,
                     channel = Channel,
@@ -309,8 +299,6 @@ websocket_init([Req, Opts]) ->
                     idle_timer = IdleTimer,
                     zone = Zone,
                     listener = {Type, Listener},
-                    limiter_timer = undefined,
-                    limiter_buffer = undefined,
                     extra = []
                 },
                 hibernate};

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2021-2024 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2021-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -27,8 +27,11 @@
 -export([
     internal_allocator/0,
     default_alloc_interval/0,
-    calc_capacity/1, calc_capacity/2
+    calc_capacity/1,
+    calc_capacity/2
 ]).
+
+-export([to_rate_key/1, to_burst_key/1]).
 
 -export_type([type/0, limiter/0, zone/0, limiter_name/0]).
 
@@ -54,22 +57,25 @@
 %%--------------------------------------------------------------------
 %%  API
 %%--------------------------------------------------------------------
+%% @doc checks if the limiter has enough tokens, and consumes them if so
 check(_Need, undefined) ->
-    {ok, undefined};
+    {true, undefined};
 check(Need, #{module := Mod} = Limiter) ->
     Mod:check(Need, Limiter).
 
+%% @doc restore the token when necessary.
+%% For example, if a limiter container has two limiters `a` and `b`,
+%% and `a `succeeds but `b` fails, then we should return the tokens to `a`.
 restore(Consumed, #{module := Mod} = Limiter) ->
     Mod:restore(Consumed, Limiter).
 
 get_cfg(Name, Cfg) ->
-    NameStr = erlang:atom_to_list(Name),
-    {ok, RateKey} = emqx_utils:safe_to_existing_atom(NameStr ++ "_rate"),
+    {ok, RateKey} = to_rate_key(Name),
     case maps:get(RateKey, Cfg, infinity) of
         infinity ->
             undefined;
         Rate ->
-            {ok, BurstKey} = emqx_utils:safe_to_existing_atom(NameStr ++ "_burst"),
+            {ok, BurstKey} = to_burst_key(Name),
             Burst = maps:get(BurstKey, Cfg, 0),
             #{rate => Rate, burst => Burst}
     end.
@@ -77,9 +83,8 @@ get_cfg(Name, Cfg) ->
 get_names_cfg(Names, Cfg) ->
     Keys = lists:foldl(
         fun(Name, Acc) ->
-            NameStr = erlang:atom_to_list(Name),
-            {ok, RateKey} = emqx_utils:safe_to_existing_atom(NameStr ++ "_rate"),
-            {ok, BurstKey} = emqx_utils:safe_to_existing_atom(NameStr ++ "_burst"),
+            {ok, RateKey} = to_rate_key(Name),
+            {ok, BurstKey} = to_burst_key(Name),
             [RateKey, BurstKey | Acc]
         end,
         [],
@@ -101,6 +106,14 @@ calc_capacity(Rate) ->
 
 calc_capacity(Rate, Interval) ->
     erlang:ceil(Rate * erlang:max(Interval, 1000)).
+
+to_rate_key(Name) ->
+    NameStr = emqx_utils_conv:str(Name),
+    emqx_utils:safe_to_existing_atom(NameStr ++ "_rate").
+
+to_burst_key(Name) ->
+    NameStr = emqx_utils_conv:str(Name),
+    emqx_utils:safe_to_existing_atom(NameStr ++ "_burst").
 
 %%--------------------------------------------------------------------
 %%  Internal functions

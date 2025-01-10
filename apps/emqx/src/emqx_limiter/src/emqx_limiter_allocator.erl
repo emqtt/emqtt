@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2021-2024 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2021-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -58,7 +58,8 @@
     counter := counters:counters_ref(),
     index := index(),
     alloc_interval := millisecond(),
-    lasttime := millisecond()
+    lasttime := millisecond(),
+    free_index := [index()]
 }.
 
 -type buckets() :: #{bucket_name() => bucket()}.
@@ -111,30 +112,57 @@ handle_call(
         counter := Counter,
         index := Index,
         alloc_interval := Interval,
-        buckets := Buckets
+        buckets := Buckets,
+        free_index := Free
     } = State
 ) ->
-    Bucket = do_create_bucket(Name, Rate, Burst, AllocatorName, Counter, Interval, Index),
-    {reply, ok, State#{buckets := Buckets#{Name => Bucket}, index := Index + 1}};
+    case Free of
+        [ToUse | Free2] ->
+            NewIndex = Index;
+        [] ->
+            ToUse = Index + 1,
+            NewIndex = ToUse,
+            Free2 = Free
+    end,
+
+    case ToUse > ?COUNTER_SIZE of
+        false ->
+            Bucket = do_create_bucket(
+                Name, Rate, Burst, AllocatorName, Counter, Interval, ToUse
+            ),
+
+            {reply, ok, State#{
+                buckets := Buckets#{Name => Bucket},
+                index := NewIndex,
+                free_index := Free2
+            }};
+        _ ->
+            {reply, {error, <<"exceeded_max_index">>}, State}
+    end;
 handle_call(
     {delete_bucket, Name},
     _From,
-    #{name := AllocatorName, buckets := Buckets} = State
+    #{name := AllocatorName, buckets := Buckets, free_index := Free} = State
 ) ->
-    emqx_limiter_manager:delete_bucket(AllocatorName, Name),
-    {reply, ok, State#{buckets := maps:remove(Name, Buckets)}};
+    case maps:take(Name, Buckets) of
+        error ->
+            {reply, ok, State};
+        {#{index := Index}, Buckets2} ->
+            emqx_limiter_manager:delete_bucket(AllocatorName, Name),
+            {reply, ok, State#{buckets := Buckets2, free_index := [Index | Free]}}
+    end;
 handle_call(Req, _From, State) ->
-    ?SLOG(error, #{msg => "unexpected_call", call => Req}),
+    ?SLOG(error, #{msg => "emqx_limiter_allocator_unexpected_call", call => Req}),
     {reply, ignored, State}.
 
 handle_cast(Req, State) ->
-    ?SLOG(error, #{msg => "unexpected_cast", cast => Req}),
+    ?SLOG(error, #{msg => "emqx_limiter_allocator_unexpected_cast", cast => Req}),
     {noreply, State}.
 
 handle_info(tick_alloc_event, State) ->
     {noreply, do_alloc(State)};
 handle_info(Info, State) ->
-    ?SLOG(error, #{msg => "unexpected_info", info => Info}),
+    ?SLOG(error, #{msg => "emqx_limiter_allocator_unexpected_info", info => Info}),
     {noreply, State}.
 
 terminate(_Reason, #{name := Name, buckets := Buckets} = _State) ->
@@ -161,7 +189,8 @@ init_state(Name) when is_binary(Name) ->
         buckets => #{},
         index => 0,
         alloc_interval => emqx_limiter:default_alloc_interval(),
-        lasttime => ?NOW
+        lasttime => ?NOW,
+        free_index => []
     };
 init_state(Zone) when is_atom(Zone) ->
     Cfg = emqx_config:get_zone_conf(Zone, [mqtt, limiter]),
@@ -177,20 +206,20 @@ init_state(Zone, #{alloc_interval := Interval} = Cfg) ->
         buckets => Buckets,
         index => maps:size(Buckets),
         alloc_interval => Interval,
-        lasttime => ?NOW
+        lasttime => ?NOW,
+        free_index => []
     }.
 
 init_buckets([Name | Names], Zone, Counter, #{alloc_interval := Interval} = Cfg, Buckets) ->
-    NameStr = erlang:atom_to_list(Name),
-    {ok, RateKey} = emqx_utils:safe_to_existing_atom(NameStr ++ "_rate"),
-    {ok, BurstKey} = emqx_utils:safe_to_existing_atom(NameStr ++ "_burst"),
+    {ok, RateKey} = emqx_limiter:to_rate_key(Name),
+    {ok, BurstKey} = emqx_limiter:to_burst_key(Name),
     case maps:get(RateKey, Cfg, infinity) of
         infinity ->
             init_buckets(Names, Zone, Counter, Cfg, Buckets);
         Rate ->
             Burst = maps:get(BurstKey, Cfg, 0),
             Bucket = do_create_bucket(
-                Name, Rate, Burst, Zone, Counter, Interval, maps:size(Buckets)
+                Name, Rate, Burst, Zone, Counter, Interval, maps:size(Buckets) + 1
             ),
             init_buckets(Names, Zone, Counter, Cfg, Buckets#{Name => Bucket})
     end;
@@ -253,7 +282,7 @@ add_tokens(#{counter := Counter, index := Index, capacity := Capacity}, Tokens) 
     Val = counters:get(Counter, Index),
     case erlang:min(Capacity, Val + Tokens) - Val of
         Inc when Inc > 0 ->
-            counters:add(Counter, Index, Inc);
+            counters:put(Counter, Index, Inc + Val);
         _ ->
             ok
     end.
@@ -265,9 +294,8 @@ do_create_bucket(
     AllocatorName,
     Counter,
     Interval,
-    Index0
+    Index
 ) ->
-    Index = Index0 + 1,
     Capacity = emqx_limiter:calc_capacity(Rate, Interval),
 
     set_tokens(Counter, Index, Capacity),

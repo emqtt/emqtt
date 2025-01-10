@@ -55,7 +55,7 @@
 
 -type limiter_name() ::
     emqx_limiter:limiter_name()
-    | retainer.
+    | emqx_retainer_dispatcher.
 
 -define(TAB, ?MODULE).
 

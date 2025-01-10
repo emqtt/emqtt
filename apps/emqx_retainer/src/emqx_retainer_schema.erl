@@ -294,11 +294,11 @@ convert_delivery_rate(#{<<"delivery_rate">> := <<"infinity">>} = Conf, _Opts) ->
     Conf#{<<"flow_control">> => FlowControl1};
 convert_delivery_rate(#{<<"delivery_rate">> := RateStr} = Conf, _Opts) ->
     {ok, RateNum} = emqx_limiter_schema:to_rate(RateStr),
-    RawRate = erlang:floor(RateNum * 1000 / emqx_limiter_schema:default_period()),
+    Capacity = emqx_limiter:calc_capacity(RateNum),
     FlowControl0 = maps:get(<<"flow_control">>, Conf, #{}),
     FlowControl1 = FlowControl0#{
-        <<"batch_read_number">> => RawRate,
-        <<"batch_deliver_number">> => RawRate,
+        <<"batch_read_number">> => Capacity,
+        <<"batch_deliver_number">> => Capacity,
         %% Set the maximum delivery rate per session
         <<"batch_deliver_limiter">> => RateNum
     },

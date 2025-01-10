@@ -33,8 +33,8 @@
 %%--------------------------------------------------------------------
 %%  API
 %%--------------------------------------------------------------------
-create_by_names(_, undefined, _) ->
-    undefined;
+create_by_names(Name, undefined, Zone) ->
+    create_by_names(Name, #{}, Zone);
 create_by_names(Names, Cfg, Zone) ->
     do_create_by_names(Names, Cfg, Zone, []).
 

@@ -41,7 +41,6 @@
 ]).
 
 -type limiter() :: emqx_limiter:limiter().
--type context() :: emqx_retainer:context().
 -type topic() :: emqx_types:topic().
 
 -define(POOL, ?DISPATCHER_POOL).
@@ -63,11 +62,6 @@ dispatch(Topic, Pid) ->
 
 -spec refresh_limiter() -> ok.
 refresh_limiter() ->
-    Conf = emqx:get_config([retainer]),
-    refresh_limiter(Conf).
-
--spec refresh_limiter(hocon:config()) -> ok.
-refresh_limiter(Conf) ->
     Workers = gproc_pool:active_workers(?POOL),
     lists:foreach(
         fun({_, Pid}) ->
@@ -106,8 +100,7 @@ start_link(Pool, Id) ->
 init([Pool, Id]) ->
     erlang:process_flag(trap_exit, true),
     true = gproc_pool:connect_worker(Pool, {Pool, Id}),
-    BucketCfg = emqx:get_config([retainer, flow_control, batch_deliver_limiter], undefined),
-    {ok, Limiter} = emqx_limiter_server:connect(?DISPATCHER_LIMITER_ID, internal, BucketCfg),
+    Limiter = get_limiter(),
     {ok, #{pool => Pool, id => Id, limiter => Limiter}}.
 
 handle_call(wait_dispatch_complete, _From, State) ->
@@ -119,9 +112,8 @@ handle_call(Req, _From, State) ->
 handle_cast({dispatch, Pid, Topic}, #{limiter := Limiter} = State) ->
     {ok, Limiter2} = dispatch(Pid, Topic, Limiter),
     {noreply, State#{limiter := Limiter2}};
-handle_cast({refresh_limiter, Conf}, State) ->
-    BucketCfg = emqx_utils_maps:deep_get([flow_control, batch_deliver_limiter], Conf, undefined),
-    {ok, Limiter} = emqx_limiter_server:connect(?DISPATCHER_LIMITER_ID, internal, BucketCfg),
+handle_cast(refresh_limiter, State) ->
+    Limiter = get_limiter(),
     {noreply, State#{limiter := Limiter}};
 handle_cast(Msg, State) ->
     ?SLOG(error, #{msg => "unexpected_cast", cast => Msg}),
@@ -262,7 +254,9 @@ take(N, [H | T], Count, Acc) ->
     take(N - 1, T, Count + 1, [H | Acc]).
 
 get_limiter() ->
-    case emqx_limiter_manager:find_bucket(emqx_limiter:internal_allocator(), retainer) of
+    case
+        emqx_limiter_manager:find_bucket(emqx_limiter:internal_allocator(), ?DISPATCHER_LIMITER_ID)
+    of
         undefined ->
             undefined;
         {ok, Ref} ->

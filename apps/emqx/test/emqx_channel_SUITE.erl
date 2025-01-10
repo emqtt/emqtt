@@ -1148,7 +1148,6 @@ mock_cm_open_session() ->
         end
     ).
 
-%% conn: 5/s; overall: 10/s
 quota() ->
     emqx_limiter_container:create_by_names(
         [bytes, messages], #{}, emqx_limiter:internal_allocator()

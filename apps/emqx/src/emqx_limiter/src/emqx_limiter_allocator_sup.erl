@@ -120,8 +120,7 @@ has_any_rate(Cfg) ->
     Names = emqx_limiter_schema:mqtt_limiter_names(),
     lists:any(
         fun(Name) ->
-            NameStr = erlang:atom_to_list(Name),
-            {ok, RateKey} = emqx_utils:safe_to_existing_atom(NameStr ++ "_rate"),
+            {ok, RateKey} = emqx_limiter:to_rate_key(Name),
             maps:get(RateKey, Cfg, infinity) =/= infinity
         end,
         Names
