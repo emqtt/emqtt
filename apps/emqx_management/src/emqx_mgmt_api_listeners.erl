@@ -410,8 +410,7 @@ crud_listeners_by_id(put, #{bindings := #{id := Id}, body := Body0}) ->
                 undefined ->
                     {404, #{code => 'BAD_LISTENER_ID', message => ?LISTENER_NOT_FOUND}};
                 PrevConf ->
-                    MergeConfT = emqx_utils_maps:deep_merge(PrevConf, Conf),
-                    MergeConf = emqx_listeners:ensure_override_limiter_conf(MergeConfT, Conf),
+                    MergeConf = emqx_utils_maps:deep_merge(PrevConf, Conf),
                     case update(Type, Name, MergeConf) of
                         {ok, #{raw_config := _RawConf}} ->
                             crud_listeners_by_id(get, #{bindings => #{id => Id}});

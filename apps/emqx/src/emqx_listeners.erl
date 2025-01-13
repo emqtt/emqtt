@@ -50,7 +50,6 @@
 -export([
     listener_id/2,
     parse_listener_id/1,
-    ensure_override_limiter_conf/2,
     esockd_access_rules/1
 ]).
 
@@ -97,6 +96,10 @@
 -define(CONF_KEY_PATH, [?ROOT_KEY, '?', '?']).
 -define(TYPES_STRING, ["tcp", "ssl", "ws", "wss", "quic"]).
 -define(MARK_DEL, ?TOMBSTONE_CONFIG_CHANGE_REQ).
+
+-define(LIMITER_BYTES_IN, bytes).
+-define(LIMITER_MESSAGE_IN, messages).
+-define(LIMITER_CONNECTION, max_conn).
 
 -spec id_example() -> atom().
 id_example() -> 'tcp:default'.
@@ -251,8 +254,6 @@ start_listener(ListenerId) ->
 -spec start_listener(listener_type(), atom(), map()) -> ok | {error, term()}.
 start_listener(Type, Name, #{bind := Bind, enable := true} = Conf) ->
     ListenerId = listener_id(Type, Name),
-    Limiter = limiter(Conf),
-    ok = add_limiter_bucket(ListenerId, Limiter),
     case do_start_listener(Type, Name, ListenerId, Conf) of
         {ok, {skipped, Reason}} when
             Reason =:= quic_app_missing
@@ -276,7 +277,6 @@ start_listener(Type, Name, #{bind := Bind, enable := true} = Conf) ->
             }),
             {error, {already_started, Pid}};
         {error, Reason} ->
-            ok = del_limiter_bucket(ListenerId, Limiter),
             ?tp(listener_not_started, #{type => Type, bind => Bind, status => {error, Reason}}),
             BindStr = format_bind(Bind),
             ?ELOG(
@@ -318,8 +318,6 @@ update_listener(Type, Name, Conf = #{enable := true}, #{enable := false}) ->
 update_listener(Type, Name, #{enable := false}, Conf = #{enable := true}) ->
     start_listener(Type, Name, Conf);
 update_listener(Type, Name, OldConf, NewConf) ->
-    Id = listener_id(Type, Name),
-    ok = update_limiter_bucket(Id, limiter(OldConf), limiter(NewConf)),
     case do_update_listener(Type, Name, OldConf, NewConf) of
         ok ->
             ok = maybe_unregister_ocsp_stapling_refresh(Type, Name, NewConf),
@@ -353,7 +351,6 @@ stop_listener(ListenerId) ->
 
 stop_listener(Type, Name, #{bind := Bind} = Conf) ->
     Id = listener_id(Type, Name),
-    ok = del_limiter_bucket(Id, limiter(Conf)),
     ok = unregister_ocsp_stapling_refresh(Type, Name),
     case do_stop_listener(Type, Id, Conf) of
         ok ->
@@ -549,10 +546,9 @@ pre_config_update([?ROOT_KEY, _Type, _Name], {create, _NewConf}, _RawConf) ->
 pre_config_update([?ROOT_KEY, _Type, _Name], {update, _Request}, undefined) ->
     {error, not_found};
 pre_config_update([?ROOT_KEY, Type, Name], {update, Request}, RawConf) ->
-    RawConf1 = emqx_utils_maps:deep_merge(RawConf, Request),
-    RawConf2 = ensure_override_limiter_conf(RawConf1, Request),
-    ok = assert_zone_exists(RawConf2),
-    {ok, convert_certs(Type, Name, RawConf2)};
+    RawConf = emqx_utils_maps:deep_merge(RawConf, Request),
+    ok = assert_zone_exists(RawConf),
+    {ok, convert_certs(Type, Name, RawConf)};
 pre_config_update([?ROOT_KEY, _Type, _Name], {action, _Action, Updated}, RawConf) ->
     {ok, emqx_utils_maps:deep_merge(RawConf, Updated)};
 pre_config_update([?ROOT_KEY, _Type, _Name], ?MARK_DEL, _RawConf) ->
@@ -608,15 +604,11 @@ esockd_opts(ListenerId, Type, Name, Opts0, OldOpts) ->
     PacketTcpOpts = choose_packet_opts(Opts0),
     Opts1 = maps:with([acceptors, max_connections, proxy_protocol, proxy_protocol_timeout], Opts0),
     Opts2 =
-        case emqx_limiter_utils:extract_with_type(connection, Limiter) of
+        case emqx_limiter_container:create_by_names([?LIMITER_CONNECTION], Opts0, Zone) of
             undefined ->
                 Opts1;
-            BucketCfg ->
-                Opts1#{
-                    limiter => emqx_esockd_htb_limiter:new_create_options(
-                        ListenerId, connection, BucketCfg
-                    )
-                }
+            ConnLimiter ->
+                Opts1#{limiter => emqx_esockd_limiter:new_create_options(ConnLimiter)}
         end,
     Opts3 = Opts2#{
         access_rules => esockd_access_rules(maps:get(access_rules, Opts0, [])),
@@ -795,37 +787,7 @@ zone(Opts) ->
     maps:get(zone, Opts, undefined).
 
 limiter(Opts) ->
-    emqx_limiter_utils:get_listener_opts(Opts).
-
-add_limiter_bucket(_Id, undefined) ->
-    ok;
-add_limiter_bucket(Id, Limiter) ->
-    maps:fold(
-        fun(Type, Cfg, _) ->
-            emqx_limiter_server:add_bucket(Id, Type, Cfg)
-        end,
-        ok,
-        maps:without([client], Limiter)
-    ).
-
-del_limiter_bucket(_Id, undefined) ->
-    ok;
-del_limiter_bucket(Id, Limiter) ->
-    maps:foreach(
-        fun(Type, _) ->
-            emqx_limiter_server:del_bucket(Id, Type)
-        end,
-        Limiter
-    ).
-
-update_limiter_bucket(Id, Limiter, undefined) ->
-    del_limiter_bucket(Id, Limiter);
-update_limiter_bucket(Id, undefined, Limiter) ->
-    add_limiter_bucket(Id, Limiter);
-update_limiter_bucket(Id, OldLimiter, NewLimiter) ->
-    ok = add_limiter_bucket(Id, NewLimiter),
-    Outdated = maps:without(maps:keys(NewLimiter), OldLimiter),
-    del_limiter_bucket(Id, Outdated).
+    emqx_limiter:get_names_cfg([?LIMITER_BYTES_IN, ?LIMITER_MESSAGE_IN], Opts).
 
 diff_confs(NewConfs, OldConfs) ->
     emqx_utils:diff_lists(
@@ -966,12 +928,6 @@ assert_zone_exists(#{<<"zone">> := Zone}) ->
     emqx_config_zones:assert_zone_exists(Zone);
 assert_zone_exists(_) ->
     ok.
-
-%% limiter config should override, not merge
-ensure_override_limiter_conf(Conf, #{<<"limiter">> := Limiter}) ->
-    Conf#{<<"limiter">> => Limiter};
-ensure_override_limiter_conf(Conf, _) ->
-    Conf.
 
 get_ssl_options(Conf = #{}) ->
     case maps:find(ssl_options, Conf) of

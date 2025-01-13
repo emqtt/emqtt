@@ -705,6 +705,9 @@ mqtt_await_rel_timeout.desc:
 mqtt_await_rel_timeout.label:
 """Max Awaiting PUBREL TIMEOUT"""
 
+mqtt_limiter.desc:
+"""MQTT related limiter configuration."""
+
 common_ssl_opts_schema_verify.desc:
 """Enable or disable peer verification."""
 

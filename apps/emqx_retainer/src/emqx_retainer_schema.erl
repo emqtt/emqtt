@@ -212,10 +212,10 @@ fields(flow_control) ->
             )},
         {batch_deliver_limiter,
             ?HOCON(
-                ?R_REF(emqx_limiter_schema, internal),
+                number(),
                 #{
                     desc => ?DESC(batch_deliver_limiter),
-                    default => undefined
+                    default => 0
                 }
             )}
     ];
@@ -300,7 +300,7 @@ convert_delivery_rate(#{<<"delivery_rate">> := RateStr} = Conf, _Opts) ->
         <<"batch_read_number">> => RawRate,
         <<"batch_deliver_number">> => RawRate,
         %% Set the maximum delivery rate per session
-        <<"batch_deliver_limiter">> => #{<<"client">> => #{<<"rate">> => RateStr}}
+        <<"batch_deliver_limiter">> => RateNum
     },
     Conf#{<<"flow_control">> => FlowControl1};
 convert_delivery_rate(Conf, _Opts) ->

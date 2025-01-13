@@ -22,88 +22,57 @@
 
 %% API
 -export([
-    new/3,
-    infinity_bucket/0,
-    check/3,
-    try_restore/2,
+    new/2,
+    check/2,
+    restore/2,
     available/1
 ]).
 
 -export_type([bucket_ref/0]).
 
--type infinity_bucket_ref() :: infinity.
--type finite_bucket_ref() :: #{
+-type bucket_ref() :: #{
     counter := counters:counters_ref(),
-    index := index(),
-    rate := rate()
+    index := index()
 }.
 
--type bucket_ref() ::
-    infinity_bucket_ref()
-    | finite_bucket_ref().
-
 -type index() :: emqx_limiter_server:index().
--type rate() :: emqx_limiter_decimal:decimal().
--type check_failure_type() :: partial | pause.
 
 -elvis([{elvis_style, no_if_expression, disable}]).
 
 %%--------------------------------------------------------------------
 %%  API
 %%--------------------------------------------------------------------
--spec new(counters:counters_ref(), index(), rate()) -> bucket_ref().
-new(Counter, Index, Rate) ->
+-spec new(counters:counters_ref(), index()) -> bucket_ref().
+new(Counter, Index) ->
     #{
         counter => Counter,
-        index => Index,
-        rate => Rate
+        index => Index
     }.
 
--spec infinity_bucket() -> bucket_ref().
-infinity_bucket() ->
-    infinity.
-
 %% @doc check tokens
--spec check(pos_integer(), bucket_ref(), Disivisble :: boolean()) ->
-    HasToken ::
-        {ok, emqx_limiter_decimal:decimal()}
-        | {check_failure_type(), rate(), pos_integer()}.
-check(_, infinity, _) ->
-    {ok, infinity};
+-spec check(pos_integer(), bucket_ref()) -> boolean().
 check(
     Need,
     #{
         counter := Counter,
-        index := Index,
-        rate := Rate
-    },
-    Divisible
+        index := Index
+    }
 ) ->
     RefToken = counters:get(Counter, Index),
     if
         RefToken >= Need ->
             counters:sub(Counter, Index, Need),
-            {ok, RefToken - Need};
-        Divisible andalso RefToken > 0 ->
-            counters:sub(Counter, Index, RefToken),
-            {partial, Rate, RefToken};
+            true;
         true ->
-            {pause, Rate, 0}
+            false
     end.
 
 %% @doc try to restore token when consume failed
--spec try_restore(non_neg_integer(), bucket_ref()) -> ok.
-try_restore(0, _) ->
+-spec restore(non_neg_integer(), bucket_ref()) -> ok.
+restore(0, _) ->
     ok;
-try_restore(_, infinity) ->
-    ok;
-try_restore(Inc, #{counter := Counter, index := Index}) ->
-    case counters:get(Counter, Index) of
-        Tokens when Tokens =< 0 ->
-            counters:add(Counter, Index, Inc);
-        _ ->
-            ok
-    end.
+restore(Inc, #{counter := Counter, index := Index}) ->
+    counters:add(Counter, Index, Inc).
 
 %% @doc get the number of tokens currently available
 -spec available(bucket_ref()) -> emqx_limiter_decimal:decimal().

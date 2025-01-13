@@ -151,7 +151,9 @@
     ((N == retry_delivery) orelse (N == expire_awaiting_rel))
 ).
 
--define(LIMITER_ROUTING, message_routing).
+-define(LIMITER_BYTES_IN, bytes).
+-define(LIMITER_MESSAGE_IN, messages).
+
 -define(chan_terminating, chan_terminating).
 -define(normal, normal).
 -define(RAND_CLIENTID_BYTES, 16).
@@ -283,6 +285,10 @@ init(
     ),
     {NClientInfo, NConnInfo0} = take_conn_info_fields([ws_cookie, peersni], ClientInfo, ConnInfo),
     NConnInfo = maybe_quic_shared_state(NConnInfo0, Opts),
+
+    LimiterNames = [?LIMITER_BYTES_IN, ?LIMITER_MESSAGE_IN],
+    Limiter = emqx_limiter_container:create_by_names(LimiterNames, LimiterCfg, Zone),
+
     #channel{
         conninfo = NConnInfo,
         clientinfo = NClientInfo,
@@ -291,9 +297,7 @@ init(
             outbound => #{}
         },
         auth_cache = #{},
-        quota = emqx_limiter_container:get_limiter_by_types(
-            ListenerId, [?LIMITER_ROUTING], LimiterCfg
-        ),
+        quota = Limiter,
         timers = #{},
         conn_state = idle,
         takeover = false,
@@ -688,8 +692,7 @@ do_publish(_PacketId, Msg = #message{qos = ?QOS_0}, Channel) ->
         disconnect ->
             handle_out(disconnect, ?RC_IMPLEMENTATION_SPECIFIC_ERROR, Channel);
         _ ->
-            NChannel = ensure_quota(Result, Channel),
-            {ok, NChannel}
+            {ok, Channel}
     end;
 do_publish(PacketId, Msg = #message{qos = ?QOS_1}, Channel) ->
     PubRes = emqx_broker:publish(Msg),
@@ -714,8 +717,7 @@ do_publish(
             RC = pubrec_reason_code(PubRes),
             NChannel0 = Channel#channel{session = NSession},
             NChannel1 = ensure_timer(expire_awaiting_rel, NChannel0),
-            NChannel2 = ensure_quota(PubRes, NChannel1),
-            handle_out(pubrec, {PacketId, RC}, NChannel2);
+            handle_out(pubrec, {PacketId, RC}, NChannel1);
         {error, RC = ?RC_PACKET_IDENTIFIER_IN_USE} ->
             ok = emqx_metrics:inc('packets.publish.inuse'),
             handle_out(pubrec, {PacketId, RC}, Channel);
@@ -724,28 +726,8 @@ do_publish(
             handle_out(disconnect, RC, Channel)
     end.
 
-do_finish_publish(PacketId, PubRes, RC, Channel) ->
-    NChannel = ensure_quota(PubRes, Channel),
-    handle_out(puback, {PacketId, RC}, NChannel).
-
-ensure_quota(_, Channel = #channel{quota = infinity}) ->
-    Channel;
-ensure_quota(PubRes, Channel = #channel{quota = Limiter}) ->
-    Cnt = lists:foldl(
-        fun
-            ({_, _, ok}, N) -> N + 1;
-            ({_, _, {ok, I}}, N) -> N + I;
-            (_, N) -> N
-        end,
-        1,
-        PubRes
-    ),
-    case emqx_limiter_container:check(Cnt, ?LIMITER_ROUTING, Limiter) of
-        {ok, NLimiter} ->
-            Channel#channel{quota = NLimiter};
-        {_, Intv, NLimiter} ->
-            ensure_timer(expire_quota_limit, Intv, Channel#channel{quota = NLimiter})
-    end.
+do_finish_publish(PacketId, _PubRes, RC, Channel) ->
+    handle_out(puback, {PacketId, RC}, Channel).
 
 -compile({inline, [pubrec_reason_code/1]}).
 pubrec_reason_code([]) -> ?RC_NO_MATCHING_SUBSCRIBERS;
@@ -1732,18 +1714,6 @@ handle_timeout(
     {ok, clean_timer(TimerName, Channel#channel{will_msg = undefined})};
 handle_timeout(
     _TRef,
-    expire_quota_limit = TimerName,
-    #channel{quota = Quota} = Channel
-) ->
-    case emqx_limiter_container:retry(?LIMITER_ROUTING, Quota) of
-        {_, Intv, Quota2} ->
-            Channel2 = ensure_timer(TimerName, Intv, Channel#channel{quota = Quota2}),
-            {ok, Channel2};
-        {_, Quota2} ->
-            {ok, clean_timer(TimerName, Channel#channel{quota = Quota2})}
-    end;
-handle_timeout(
-    _TRef,
     connection_auth_expire,
     #channel{conn_state = ConnState} = Channel0
 ) ->
@@ -2375,10 +2345,19 @@ packing_alias(Packet, Channel) ->
 %%--------------------------------------------------------------------
 %% Check quota state
 
-check_quota_exceeded(_, #channel{timers = Timers}) ->
-    case maps:get(expire_quota_limit, Timers, undefined) of
-        undefined -> ok;
-        _ -> {error, ?RC_QUOTA_EXCEEDED}
+check_quota_exceeded(
+    ?PUBLISH_PACKET(_QoS, _Topic, _PacketId, Payload), #channel{quota = Quota} = Chann
+) ->
+    {Result, Quota2} = emqx_limiter_container:check(
+        [{bytes, erlang:byte_size(Payload)}, {messages, 1}], Quota
+    ),
+    NChann = Chann#channel{quota = Quota2},
+
+    case Result of
+        true ->
+            {ok, NChann};
+        _ ->
+            {error, ?RC_QUOTA_EXCEEDED, NChann}
     end.
 
 %%--------------------------------------------------------------------

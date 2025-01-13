@@ -399,7 +399,7 @@ fields("authz_cache") ->
             })}
     ];
 fields("mqtt") ->
-    mqtt_general() ++ mqtt_session();
+    mqtt_general() ++ mqtt_session() ++ mqtt_limiter();
 fields("zone") ->
     emqx_zone_schema:zones_without_default();
 fields("flapping_detect") ->
@@ -2037,17 +2037,6 @@ base_listener(Bind) ->
                     importance => ?IMPORTANCE_LOW
                 }
             )},
-        {"limiter",
-            sc(
-                ?R_REF(
-                    emqx_limiter_schema,
-                    listener_fields
-                ),
-                #{
-                    desc => ?DESC(base_listener_limiter),
-                    importance => ?IMPORTANCE_HIDDEN
-                }
-            )},
         {"enable_authn",
             sc(
                 hoconsc:enum([true, false, quick_deny_anonymous]),
@@ -2056,7 +2045,7 @@ base_listener(Bind) ->
                     default => true
                 }
             )}
-    ] ++ emqx_limiter_schema:short_paths_fields().
+    ] ++ emqx_limiter_schema:fields(mqtt).
 
 %% @hidden Starting from 5.7, listeners.{TYPE}.{NAME}.zone is no longer hidden
 %% However, the root key 'zones' is still hidden because the fields' schema
@@ -4043,6 +4032,18 @@ mqtt_session() ->
                     default => <<"300s">>,
                     desc => ?DESC(mqtt_await_rel_timeout),
                     importance => ?IMPORTANCE_LOW
+                }
+            )}
+    ].
+
+mqtt_limiter() ->
+    [
+        {limiter,
+            sc(
+                ref(emqx_limiter_schema, mqtt_with_interval),
+                #{
+                    required => {false, recursively},
+                    desc => ?DESC(mqtt_limiter)
                 }
             )}
     ].

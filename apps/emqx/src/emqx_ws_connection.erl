@@ -89,33 +89,20 @@
     %% Listener Type and Name
     listener :: {Type :: atom(), Name :: atom()},
 
-    %% Limiter
-    limiter :: container(),
+    %% deprecated
+    limiter :: any(),
 
-    %% cache operation when overload
-    limiter_buffer :: queue:queue(cache()),
+    %% deprecated
+    limiter_buffer :: any(),
 
-    %% limiter timers
-    limiter_timer :: undefined | reference(),
+    %% deprecated
+    limiter_timer :: any(),
 
     %% Extra field for future hot-upgrade support
     extra = []
 }).
 
--record(retry, {
-    types :: list(limiter_type()),
-    data :: any(),
-    next :: check_succ_handler()
-}).
-
--record(cache, {
-    need :: list({pos_integer(), limiter_type()}),
-    data :: any(),
-    next :: check_succ_handler()
-}).
-
 -type state() :: #state{}.
--type cache() :: #cache{}.
 
 -type ws_cmd() :: {active, boolean()} | close.
 
@@ -123,8 +110,6 @@
 -define(SOCK_STATS, [recv_oct, recv_cnt, send_oct, send_cnt]).
 
 -define(ENABLED(X), (X =/= undefined)).
--define(LIMITER_BYTES_IN, bytes).
--define(LIMITER_MESSAGE_IN, messages).
 
 -define(LOG(Level, Data), ?SLOG(Level, ?MAPPEND(Data, #{tag => "MQTT"}))).
 
@@ -157,8 +142,6 @@ info(sockname, #state{sockname = Sockname}) ->
     Sockname;
 info(sockstate, #state{sockstate = SockSt}) ->
     SockSt;
-info(limiter, #state{limiter = Limiter}) ->
-    Limiter;
 info(channel, #state{channel = Channel}) ->
     emqx_channel:info(Channel);
 info(gc_state, #state{gc_state = GcSt}) ->
@@ -280,7 +263,7 @@ check_origin_header(Req, #{listener := {Type, Listener}} = Opts) ->
     end.
 
 websocket_init([Req, Opts]) ->
-    #{zone := Zone, limiter := LimiterCfg, listener := {Type, Listener} = ListenerCfg} = Opts,
+    #{zone := Zone, listener := {Type, Listener}} = Opts,
     case check_max_connection(Type, Listener) of
         allow ->
             {Peername, PeerCert, PeerSNI} = get_peer_info(Type, Listener, Req, Opts),
@@ -295,11 +278,6 @@ websocket_init([Req, Opts]) ->
                 ws_cookie => WsCookie,
                 conn_mod => ?MODULE
             },
-            Limiter = emqx_limiter_container:get_limiter_by_types(
-                ListenerCfg,
-                [?LIMITER_BYTES_IN, ?LIMITER_MESSAGE_IN],
-                LimiterCfg
-            ),
             MQTTPiggyback = get_ws_opts(Type, Listener, mqtt_piggyback),
             FrameOpts = #{
                 strict_mode => emqx_config:get_zone_conf(Zone, [mqtt, strict_mode]),
@@ -321,7 +299,7 @@ websocket_init([Req, Opts]) ->
                     sockname = Sockname,
                     sockstate = running,
                     mqtt_piggyback = MQTTPiggyback,
-                    limiter = Limiter,
+                    limiter = undefined,
                     parse_state = ParseState,
                     serialize = Serialize,
                     channel = Channel,
@@ -332,7 +310,7 @@ websocket_init([Req, Opts]) ->
                     zone = Zone,
                     listener = {Type, Listener},
                     limiter_timer = undefined,
-                    limiter_buffer = queue:new(),
+                    limiter_buffer = undefined,
                     extra = []
                 },
                 hibernate};
@@ -421,13 +399,7 @@ websocket_handle({binary, Data}, State) ->
     LenMsg = erlang:length(Packets),
     ByteSize = erlang:iolist_size(Data),
     inc_recv_stats(LenMsg, ByteSize),
-    State4 = check_limiter(
-        [{ByteSize, ?LIMITER_BYTES_IN}, {LenMsg, ?LIMITER_MESSAGE_IN}],
-        Packets,
-        fun when_msg_in/3,
-        [],
-        State3
-    ),
+    State4 = postpone(Packets, State3),
     return(State4);
 %% Pings should be replied with pongs, cowboy does it automatically
 %% Pongs can be safely ignored. Clause here simply prevents crash.
@@ -466,19 +438,6 @@ websocket_info(
     ActiveN = get_active_n(Type, Listener),
     Delivers = [Deliver | emqx_utils:drain_deliver(ActiveN)],
     with_channel(handle_deliver, [Delivers], State);
-websocket_info(
-    {timeout, _, limit_timeout},
-    State
-) ->
-    return(retry_limiter(State));
-websocket_info(check_limiter_buffer, #state{limiter_buffer = Buffer} = State) ->
-    case queue:peek(Buffer) of
-        empty ->
-            return(enqueue({active, true}, State#state{sockstate = running}));
-        {value, #cache{need = Needs, data = Data, next = Next}} ->
-            State2 = State#state{limiter_buffer = queue:drop(Buffer)},
-            return(check_limiter(Needs, Data, Next, [check_limiter_buffer], State2))
-    end;
 websocket_info({timeout, TRef, Msg}, State) when is_reference(TRef) ->
     handle_timeout(TRef, Msg, State);
 websocket_info({shutdown, Reason}, State) ->
@@ -576,122 +535,6 @@ handle_timeout(
     return(State#state{stats_timer = undefined});
 handle_timeout(TRef, TMsg, State) ->
     with_channel(handle_timeout, [TRef, TMsg], State).
-
-%%--------------------------------------------------------------------
-%% Ensure rate limit
-%%--------------------------------------------------------------------
-
--type limiter_type() :: emqx_limiter_container:limiter_type().
--type container() :: emqx_limiter_container:container().
--type check_succ_handler() ::
-    fun((any(), list(any()), state()) -> state()).
-
--spec check_limiter(
-    list({pos_integer(), limiter_type()}),
-    any(),
-    check_succ_handler(),
-    list(any()),
-    state()
-) -> state().
-check_limiter(
-    _Needs,
-    Data,
-    WhenOk,
-    Msgs,
-    #state{limiter = infinity} = State
-) ->
-    WhenOk(Data, Msgs, State);
-check_limiter(
-    Needs,
-    Data,
-    WhenOk,
-    Msgs,
-    #state{channel = Channel, limiter_timer = undefined, limiter = Limiter} = State
-) ->
-    case emqx_limiter_container:check_list(Needs, Limiter) of
-        {ok, Limiter2} ->
-            WhenOk(Data, Msgs, State#state{limiter = Limiter2});
-        {pause, Time, Limiter2} ->
-            ?SLOG_THROTTLE(
-                warning,
-                #{
-                    msg => socket_receive_paused_by_rate_limit,
-                    paused_ms => Time
-                },
-                #{
-                    tag => "RATE",
-                    clientid => emqx_channel:info(clientid, Channel)
-                }
-            ),
-
-            Retry = #retry{
-                types = [Type || {_, Type} <- Needs],
-                data = Data,
-                next = WhenOk
-            },
-
-            Limiter3 = emqx_limiter_container:set_retry_context(Retry, Limiter2),
-
-            TRef = start_timer(Time, limit_timeout),
-
-            enqueue(
-                {active, false},
-                State#state{
-                    sockstate = blocked,
-                    limiter = Limiter3,
-                    limiter_timer = TRef
-                }
-            );
-        {drop, Limiter2} ->
-            {ok, State#state{limiter = Limiter2}}
-    end;
-check_limiter(
-    Needs,
-    Data,
-    WhenOk,
-    _Msgs,
-    #state{limiter_buffer = Buffer} = State
-) ->
-    New = #cache{need = Needs, data = Data, next = WhenOk},
-    State#state{limiter_buffer = queue:in(New, Buffer)}.
-
--spec retry_limiter(state()) -> state().
-retry_limiter(#state{channel = Channel, limiter = Limiter} = State) ->
-    #retry{types = Types, data = Data, next = Next} = emqx_limiter_container:get_retry_context(
-        Limiter
-    ),
-    case emqx_limiter_container:retry_list(Types, Limiter) of
-        {ok, Limiter2} ->
-            Next(
-                Data,
-                [check_limiter_buffer],
-                State#state{
-                    limiter = Limiter2,
-                    limiter_timer = undefined
-                }
-            );
-        {pause, Time, Limiter2} ->
-            ?SLOG_THROTTLE(
-                warning,
-                #{
-                    msg => socket_receive_paused_by_rate_limit,
-                    paused_ms => Time
-                },
-                #{
-                    tag => "RATE",
-                    clientid => emqx_channel:info(clientid, Channel)
-                }
-            ),
-
-            TRef = start_timer(Time, limit_timeout),
-
-            State#state{limiter = Limiter2, limiter_timer = TRef}
-    end.
-
-when_msg_in(Packets, [], State) ->
-    postpone(Packets, State);
-when_msg_in(Packets, Msgs, State) ->
-    postpone(Packets, enqueue(Msgs, State)).
 
 %%--------------------------------------------------------------------
 %% Run GC, Check OOM

@@ -14,12 +14,12 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(emqx_limiter_server_sup).
+-module(emqx_limiter_allocator_sup).
 
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, start/1, start/2, stop/1]).
+-export([start_link/0, start/1, stop/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -42,20 +42,19 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
--spec start(emqx_limiter_schema:limiter_type()) -> _.
-start(Type) ->
-    Spec = make_child(Type),
-    supervisor:start_child(?MODULE, Spec).
+-spec start(emqx_limiter:zone()) -> _.
+start(Zone) ->
+    case has_limiter(Zone) of
+        true ->
+            Spec = make_child(Zone),
+            supervisor:start_child(?MODULE, Spec);
+        _ ->
+            {error, <<"No Limiter">>}
+    end.
 
--spec start(emqx_limiter_schema:limiter_type(), hocon:config()) -> _.
-start(Type, Cfg) ->
-    Spec = make_child(Type, Cfg),
-    supervisor:start_child(?MODULE, Spec).
-
-stop(Type) ->
-    Id = emqx_limiter_server:name(Type),
-    _ = supervisor:terminate_child(?MODULE, Id),
-    supervisor:delete_child(?MODULE, Id).
+stop(Zone) ->
+    _ = supervisor:terminate_child(?MODULE, Zone),
+    supervisor:delete_child(?MODULE, Zone).
 
 %%--------------------------------------------------------------------
 %%  Supervisor callbacks
@@ -79,26 +78,51 @@ init([]) ->
         intensity => 10,
         period => 3600
     },
-
     {ok, {SupFlags, childs()}}.
 
 %%--==================================================================
 %%  Internal functions
 %%--==================================================================
-make_child(Type) ->
-    Cfg = emqx_limiter_utils:get_node_opts(Type),
-    make_child(Type, Cfg).
-
-make_child(Type, Cfg) ->
-    Id = emqx_limiter_server:name(Type),
+make_child(Zone) ->
     #{
-        id => Id,
-        start => {emqx_limiter_server, start_link, [Type, Cfg]},
+        id => Zone,
+        start => {emqx_limiter_allocator, start_link, [Zone]},
         restart => transient,
         shutdown => 5000,
         type => worker,
-        modules => [emqx_limiter_server]
+        modules => [emqx_limiter_allocator]
     }.
 
 childs() ->
-    [make_child(Type) || Type <- emqx_limiter_schema:types()].
+    Zones = maps:keys(emqx_config:get([zones])),
+    lists:foldl(
+        fun(Zone, Acc) ->
+            case has_limiter(Zone) of
+                true ->
+                    [make_child(Zone) | Acc];
+                _ ->
+                    Acc
+            end
+        end,
+        [make_child(emqx_limiter:internal_allocator())],
+        Zones
+    ).
+
+has_limiter(Zone) ->
+    case emqx_config:get_zone_conf(Zone, [mqtt, limiter], undefined) of
+        undefined ->
+            false;
+        Cfg ->
+            has_any_rate(Cfg)
+    end.
+
+has_any_rate(Cfg) ->
+    Names = emqx_limiter_schema:mqtt_limiter_names(),
+    lists:any(
+        fun(Name) ->
+            NameStr = erlang:atom_to_list(Name),
+            {ok, RateKey} = emqx_utils:safe_to_existing_atom(NameStr ++ "_rate"),
+            maps:get(RateKey, Cfg, infinity) =/= infinity
+        end,
+        Names
+    ).

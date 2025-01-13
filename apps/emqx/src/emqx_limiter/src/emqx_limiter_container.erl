@@ -16,170 +16,105 @@
 
 -module(emqx_limiter_container).
 
-%% @doc the container of emqx_htb_limiter
-%% used to merge limiters of different type of limiters to simplify operations
-%% @end
-
 %% API
--export([
-    get_limiter_by_types/3,
-    add_new/3,
-    set_retry_context/2,
-    check/3,
-    retry/2,
-    get_retry_context/1,
-    check_list/2,
-    retry_list/2
-]).
+-export([create_by_names/3, create/1, check/2]).
 
--export_type([limiter/0, container/0, check_result/0, limiter_type/0]).
+-type index() :: pos_integer().
 
 -type container() ::
-    infinity
+    undefined
     | #{
-        limiter_type() => undefined | limiter(),
-        %% the retry context of the limiter
-        retry_key() =>
-            undefined
-            | retry_context()
-            | future(),
-        %% the retry context of the container
-        retry_ctx := undefined | any()
+        emqx_limiter:limiter_name() => [index()],
+        index() => emqx_limiter:limiter()
     }.
 
--type future() :: pos_integer().
--type limiter_id() :: emqx_limiter_schema:limiter_id().
--type limiter_type() :: emqx_limiter_schema:limiter_type().
--type limiter() :: emqx_htb_limiter:limiter().
--type retry_context() :: emqx_htb_limiter:retry_context(limiter()).
--type millisecond() :: non_neg_integer().
--type check_result() ::
-    {ok, container()}
-    | {drop, container()}
-    | {pause, millisecond(), container()}.
-
--define(RETRY_KEY(Type), {retry, Type}).
--type retry_key() :: ?RETRY_KEY(limiter_type()).
+-export_type([container/0]).
 
 %%--------------------------------------------------------------------
 %%  API
 %%--------------------------------------------------------------------
-%% @doc generate a container
-%% according to the type of limiter and the bucket name configuration of the limiter
-%% @end
--spec get_limiter_by_types(
-    limiter_id() | {atom(), atom()},
-    list(limiter_type()),
-    #{limiter_type() => hocon:config()}
-) -> container().
-get_limiter_by_types({Type, Listener}, Types, BucketCfgs) ->
-    Id = emqx_listeners:listener_id(Type, Listener),
-    get_limiter_by_types(Id, Types, BucketCfgs);
-get_limiter_by_types(Id, Types, BucketCfgs) ->
-    Init = fun(Type, Acc) ->
-        {ok, Limiter} = emqx_limiter_server:connect(Id, Type, BucketCfgs),
-        add_new(Type, Limiter, Acc)
-    end,
-    Container = lists:foldl(Init, #{retry_ctx => undefined}, Types),
-    case
-        lists:all(
-            fun(Type) ->
-                maps:get(Type, Container) =:= infinity
-            end,
-            Types
-        )
-    of
-        true ->
-            infinity;
-        _ ->
-            Container
-    end.
+create_by_names(Names, Cfg, Zone) ->
+    do_create_by_names(Names, Cfg, Zone, []).
 
--spec add_new(limiter_type(), limiter(), container()) -> container().
-add_new(Type, Limiter, Container) ->
-    Container#{
-        Type => Limiter,
-        ?RETRY_KEY(Type) => undefined
-    }.
+-spec create([{emqx_limiter:limter_name(), [emqx_limiter:limiter()]}]) -> container().
+create(Groups) ->
+    do_create(Groups, 1, #{}).
 
-%% @doc check the specified limiter
--spec check(pos_integer(), limiter_type(), container()) -> check_result().
-check(_Need, _Type, infinity) ->
-    {ok, infinity};
-check(Need, Type, Container) ->
-    check_list([{Need, Type}], Container).
-
-%% @doc check multiple limiters
--spec check_list(list({pos_integer(), limiter_type()}), container()) -> check_result().
-check_list(_Need, infinity) ->
-    {ok, infinity};
-check_list([{Need, Type} | T], Container) ->
-    Limiter = maps:get(Type, Container),
-    case emqx_htb_limiter:check(Need, Limiter) of
-        {ok, Limiter2} ->
-            check_list(T, Container#{Type := Limiter2});
-        {_, PauseMs, Ctx, Limiter2} ->
-            Fun = fun({FN, FT}, Acc) ->
-                Future = emqx_htb_limiter:make_future(FN),
-                Acc#{?RETRY_KEY(FT) := Future}
-            end,
-            C2 = lists:foldl(
-                Fun,
-                Container#{
-                    Type := Limiter2,
-                    ?RETRY_KEY(Type) := Ctx
-                },
-                T
-            ),
-            {pause, PauseMs, C2};
-        {drop, Limiter2} ->
-            {drop, Container#{Type := Limiter2}}
-    end;
-check_list([], Container) ->
-    {ok, Container}.
-
-%% @doc retry the specified limiter
--spec retry(limiter_type(), container()) -> check_result().
-retry(_Type, infinity) ->
-    {ok, infinity};
-retry(Type, Container) ->
-    retry_list([Type], Container).
-
-%% @doc retry multiple limiters
--spec retry_list(list(limiter_type()), container()) -> check_result().
-retry_list(_Types, infinity) ->
-    {ok, infinity};
-retry_list([Type | T], Container) ->
-    Key = ?RETRY_KEY(Type),
-    case Container of
-        #{
-            Type := Limiter,
-            Key := Retry
-        } when Retry =/= undefined ->
-            case emqx_htb_limiter:check(Retry, Limiter) of
-                {ok, Limiter2} ->
-                    %% undefined meaning there is no retry context or there is no need to retry
-                    %% when a limiter has a undefined retry context, the check will always success
-                    retry_list(T, Container#{Type := Limiter2, Key := undefined});
-                {_, PauseMs, Ctx, Limiter2} ->
-                    {pause, PauseMs, Container#{Type := Limiter2, Key := Ctx}};
-                {drop, Limiter2} ->
-                    {drop, Container#{Type := Limiter2}}
-            end;
-        _ ->
-            retry_list(T, Container)
-    end;
-retry_list([], Container) ->
-    {ok, Container}.
-
--spec set_retry_context(any(), container()) -> container().
-set_retry_context(Data, Container) ->
-    Container#{retry_ctx := Data}.
-
--spec get_retry_context(container()) -> any().
-get_retry_context(#{retry_ctx := Data}) ->
-    Data.
+-spec check([{emqx_limiter:limiter_name(), non_neg_integer()}], container()) ->
+    {boolean(), container()}.
+check(_Needs, undefined) ->
+    {true, undefined};
+check(Needs, Container) ->
+    do_check(Needs, Container, []).
 
 %%--------------------------------------------------------------------
 %%  Internal functions
 %%--------------------------------------------------------------------
+do_create_by_names([Name | Names], Cfg, Zone, Acc) ->
+    Private =
+        case emqx_limiter:get_cfg(Name, Cfg) of
+            undefined ->
+                [];
+            LimiterCfg ->
+                [emqx_limiter_private:create(LimiterCfg)]
+        end,
+    Limiters =
+        case emqx_limiter_manager:find_bucket(Zone, Name) of
+            {ok, Ref} ->
+                [emqx_limiter_shared:create(Ref) | Private];
+            undefined ->
+                Private
+        end,
+    do_create_by_names(Names, Cfg, Zone, [{Name, Limiters} | Acc]);
+do_create_by_names([], _Cfg, _Zone, Acc) ->
+    create(Acc).
+
+do_create([{Name, Limiters} | Groups], Seq, Acc) ->
+    do_assign_limiters(Limiters, Name, Groups, Seq, [], Acc);
+do_create([], 1, _Acc) ->
+    undefined;
+do_create([], _Seq, Acc) ->
+    Acc.
+
+do_assign_limiters([Limiter | Limiters], Name, Groups, Seq, Indexes, Acc) ->
+    do_assign_limiters(Limiters, Name, Groups, Seq + 1, [Seq | Indexes], Acc#{Seq => Limiter});
+do_assign_limiters([], Name, Groups, Seq, Indexes, Acc) ->
+    do_create(Groups, Seq, Acc#{Name => Indexes}).
+
+do_check([{Name, Need} | Needs], Container, Acc) ->
+    case maps:find(Name, Container) of
+        error ->
+            do_check(Needs, Container, Acc);
+        {ok, Indexes} ->
+            case do_check_limiters(Need, Indexes, Container, Acc) of
+                {true, Container2, Acc2} ->
+                    do_check(Needs, Container2, Acc2);
+                {false, Container2, Acc2} ->
+                    {false, do_restore(Acc2, Container2)}
+            end
+    end;
+do_check([], Container, _Acc) ->
+    {true, Container}.
+
+do_check_limiters(Need, [Index | Indexes], Container, Acc) ->
+    Limiter = maps:get(Index, Container),
+    case emqx_limiter:check(Need, Limiter) of
+        {true, Limiter2} ->
+            do_check_limiters(
+                Need,
+                Indexes,
+                Container#{Index := Limiter2},
+                [{Index, Need} | Acc]
+            );
+        {false, Limiter2} ->
+            {false, Container#{Index := Limiter2}, Acc}
+    end;
+do_check_limiters(_, [], Container, Acc) ->
+    {true, Container, Acc}.
+
+do_restore([{Index, Consumed} | Indexes], Container) ->
+    Limiter = maps:get(Index, Container),
+    Limiter2 = emqx_limiter:restore(Limiter, Consumed),
+    do_restore(Indexes, Container#{Index := Limiter2});
+do_restore([], Container) ->
+    Container.

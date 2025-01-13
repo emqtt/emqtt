@@ -41,4 +41,10 @@ For example:
 bytes_rate.label:
 """Data Publish Rate"""
 
+mqtt.desc:
+"""MQTT related limiters."""
+
+alloc_interval.desc:
+"""Token allocation interval for shared limiter."""
+
 }

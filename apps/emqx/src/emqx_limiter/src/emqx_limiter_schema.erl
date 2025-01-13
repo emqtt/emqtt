@@ -22,258 +22,89 @@
 -export([
     roots/0,
     fields/1,
+    namespace/0,
+    desc/1
+]).
+
+-export([
     to_rate/1,
     to_capacity/1,
     to_burst/1,
-    default_period/0,
     to_burst_rate/1,
     to_initial/1,
-    namespace/0,
-    get_bucket_cfg_path/2,
-    desc/1,
-    types/0,
-    short_paths/0,
-    short_paths_fields/0,
     rate_type/0
 ]).
 
--define(KILOBYTE, 1024).
--define(LISTENER_BUCKET_KEYS, [
-    bytes,
-    messages,
-    connection,
-    message_routing
+-export([
+    mqtt_limiter_schema/0,
+    mqtt_limiter_names/0
 ]).
 
--type limiter_type() ::
-    bytes
-    | messages
-    | connection
-    | message_routing
-    %% internal limiter for unclassified resources
-    | internal.
+-define(KILOBYTE, 1024).
 
--type limiter_id() :: atom().
--type bucket_name() :: atom().
--type rate() :: infinity | float().
+-type rate() :: infinity | number().
 -type burst_rate() :: number().
 %% this is a compatible type for the deprecated field and type `capacity`.
 -type burst() :: burst_rate().
-%% the capacity of the token bucket
-%%-type capacity() :: non_neg_integer().
-%% initial capacity of the token bucket
--type initial() :: non_neg_integer().
--type bucket_path() :: list(atom()).
 
 %% the processing strategy after the failure of the token request
-
-%% Forced to pass
--type failure_strategy() ::
-    force
-    %% discard the current request
-    | drop
-    %% throw an exception
-    | throw.
-
 -typerefl_from_string({rate/0, ?MODULE, to_rate}).
 -typerefl_from_string({burst_rate/0, ?MODULE, to_burst_rate}).
 -typerefl_from_string({burst/0, ?MODULE, to_burst}).
--typerefl_from_string({initial/0, ?MODULE, to_initial}).
 
 -reflect_type([
     rate/0,
     burst_rate/0,
-    burst/0,
-    initial/0,
-    failure_strategy/0,
-    bucket_name/0
+    burst/0
 ]).
 
--export_type([limiter_id/0, limiter_type/0, bucket_path/0]).
-
--define(UNIT_TIME_IN_MS, 1000).
+%%--------------------------------------------------------------------
+%% schema
+%%--------------------------------------------------------------------
 
 namespace() -> limiter.
 
 roots() ->
-    [
-        {limiter,
-            hoconsc:mk(hoconsc:ref(?MODULE, limiter), #{
-                importance => ?IMPORTANCE_HIDDEN
-            })}
-    ].
+    [limiter].
 
-fields(limiter) ->
-    short_paths_fields(?IMPORTANCE_HIDDEN) ++
+fields(mqtt_with_interval) ->
+    fields(mqtt) ++
         [
-            {Type,
-                ?HOCON(?R_REF(node_opts), #{
-                    desc => deprecated_desc(Type),
-                    importance => ?IMPORTANCE_HIDDEN,
-                    required => {false, recursively},
-                    aliases => alias_of_type(Type)
+            {alloc_interval,
+                ?HOCON(emqx_schema:duration_ms(), #{
+                    desc => ?DESC(alloc_interval),
+                    default => emqx_limiter:default_alloc_interval(),
+                    importance => ?IMPORTANCE_LOW
                 })}
-         || Type <- types()
-        ] ++
-        [
-            %% This is an undocumented feature, and it won't be support anymore
-            {client,
-                ?HOCON(
-                    ?R_REF(client_fields),
-                    #{
-                        desc => deprecated_desc(client),
-                        importance => ?IMPORTANCE_HIDDEN,
-                        required => {false, recursively},
-                        deprecated => {since, "5.0.25"}
-                    }
-                )}
         ];
-fields(node_opts) ->
-    [
-        {rate, ?HOCON(rate_type(), #{desc => deprecated_desc(rate), default => <<"infinity">>})},
-        {burst,
-            ?HOCON(burst_rate_type(), #{
-                desc => deprecated_desc(burst),
-                default => <<"0">>
-            })}
-    ];
-fields(client_fields) ->
-    client_fields(types());
-fields(bucket_opts) ->
-    fields_of_bucket(<<"infinity">>);
-fields(client_opts) ->
-    [
-        {rate, ?HOCON(rate_type(), #{default => <<"infinity">>, desc => deprecated_desc(rate)})},
-        {initial,
-            ?HOCON(initial(), #{
-                default => <<"0">>,
+fields(mqtt) ->
+    lists:foldl(fun make_mqtt_limiters_schema/2, [], mqtt_limiter_names()).
 
-                desc => deprecated_desc(initial),
-                importance => ?IMPORTANCE_HIDDEN
-            })},
-        %% low_watermark add for emqx_channel and emqx_session
-        %% both modules consume first and then check
-        %% so we need to use this value to prevent excessive consumption
-        %% (e.g, consumption from an empty bucket)
-        {low_watermark,
-            ?HOCON(
-                initial(),
-                #{
-                    desc => deprecated_desc(low_watermark),
-                    default => <<"0">>,
-                    importance => ?IMPORTANCE_HIDDEN
-                }
-            )},
-        {burst,
-            ?HOCON(burst_type(), #{
-                desc => deprecated_desc(burst),
-                default => <<"0">>,
-                importance => ?IMPORTANCE_HIDDEN,
-                aliases => [capacity]
-            })},
-        {divisible,
-            ?HOCON(
-                boolean(),
-                #{
-                    desc => deprecated_desc(divisible),
-                    default => true,
-                    importance => ?IMPORTANCE_HIDDEN
-                }
-            )},
-        {max_retry_time,
-            ?HOCON(
-                emqx_schema:timeout_duration(),
-                #{
-                    desc => deprecated_desc(max_retry_time),
-                    default => <<"1h">>,
-                    importance => ?IMPORTANCE_HIDDEN
-                }
-            )},
-        {failure_strategy,
-            ?HOCON(
-                failure_strategy(),
-                #{
-                    desc => deprecated_desc(failure_strategy),
-                    default => force,
-                    importance => ?IMPORTANCE_HIDDEN
-                }
-            )}
-    ];
-fields(listener_fields) ->
-    composite_bucket_fields(?LISTENER_BUCKET_KEYS, listener_client_fields);
-fields(listener_client_fields) ->
-    client_fields(?LISTENER_BUCKET_KEYS);
-fields(Type) ->
-    simple_bucket_field(Type).
-
-short_paths_fields() ->
-    short_paths_fields(?DEFAULT_IMPORTANCE).
-
-short_paths_fields(Importance) ->
-    [
-        {Name,
-            ?HOCON(
-                rate_type(),
-                maps:merge(
-                    #{
-                        desc => ?DESC(Name),
-                        required => false,
-                        importance => Importance,
-                        example => Example
-                    },
-                    short_paths_fields_extra(Name)
-                )
-            )}
-     || {Name, Example} <-
-            lists:zip(short_paths(), [<<"1000/s">>, <<"1000/s">>, <<"100MB/s">>])
-    ].
-
-short_paths_fields_extra(max_conn_rate) ->
-    #{
-        default => infinity
-    };
-short_paths_fields_extra(_Name) ->
-    #{}.
-
-desc(limiter) ->
-    "Settings for the rate limiter.";
-desc(node_opts) ->
-    "Settings for the limiter of the node level.";
-desc(bucket_opts) ->
-    "Settings for the bucket.";
-desc(client_opts) ->
-    "Settings for the client in bucket level.";
-desc(client_fields) ->
-    "Fields of the client level.";
-desc(listener_fields) ->
-    "Fields of the listener.";
-desc(listener_client_fields) ->
-    "Fields of the client level of the listener.";
-desc(internal) ->
-    "Internal limiter.";
+desc(mqtt_with_interval) ->
+    ?DESC(mqtt);
+desc(mqtt) ->
+    ?DESC(mqtt);
 desc(_) ->
     undefined.
 
-%% default period is 100ms
-default_period() ->
-    100.
+%%--------------------------------------------------------------------
+%% API
+%%--------------------------------------------------------------------
+mqtt_limiter_schema() ->
+    fields(limiter).
 
-to_rate(Str) ->
-    to_rate(Str, true, false).
-
--spec get_bucket_cfg_path(limiter_type(), bucket_name()) -> bucket_path().
-get_bucket_cfg_path(Type, BucketName) ->
-    [limiter, Type, bucket, BucketName].
-
-types() ->
-    [bytes, messages, connection, message_routing, internal].
-
-short_paths() ->
-    [max_conn_rate, messages_rate, bytes_rate].
+mqtt_limiter_names() ->
+    [
+        max_conn,
+        messages,
+        bytes
+    ].
 
 %%--------------------------------------------------------------------
 %% Internal functions
 %%--------------------------------------------------------------------
+to_rate(Str) ->
+    to_rate(Str, true, false).
 
 to_burst_rate(Str) ->
     to_rate(Str, false, true).
@@ -308,7 +139,7 @@ to_rate(Str, CanInfinity, CanZero) ->
         %% if time unit is 1s, it can be omitted
         {match, [QuotaStr]} ->
             Fun = fun(Quota) ->
-                {ok, Quota * default_period() / ?UNIT_TIME_IN_MS}
+                {ok, erlang:float(Quota) / 1000}
             end,
             to_capacity(QuotaStr, Str, CanZero, Fun);
         {match, [QuotaStr, TimeVal, TimeUnit]} ->
@@ -323,7 +154,7 @@ to_rate(Str, CanInfinity, CanZero) ->
                 try
                     case emqx_schema:to_duration_ms(Interval) of
                         {ok, Ms} when Ms > 0 ->
-                            {ok, Quota * default_period() / Ms};
+                            {ok, erlang:float(Quota) / Ms};
                         {ok, 0} when CanZero ->
                             {ok, 0};
                         _ ->
@@ -388,99 +219,26 @@ apply_unit("mb", Val) -> {ok, Val * ?KILOBYTE * ?KILOBYTE};
 apply_unit("gb", Val) -> {ok, Val * ?KILOBYTE * ?KILOBYTE * ?KILOBYTE};
 apply_unit(Unit, _) -> {error, "invalid unit:" ++ Unit}.
 
-%% A bucket with only one type
-simple_bucket_field(Type) when is_atom(Type) ->
-    fields(bucket_opts) ++
-        [
-            {client,
-                ?HOCON(
-                    ?R_REF(?MODULE, client_opts),
-                    #{
-                        desc => deprecated_desc(client),
-                        required => {false, recursively},
-                        importance => importance_of_type(Type),
-                        aliases => alias_of_type(Type)
-                    }
-                )}
-        ].
-
-%% A bucket with multi types
-composite_bucket_fields(Types, ClientRef) ->
+make_mqtt_limiters_schema(Name, Schemas) ->
+    NameStr = erlang:atom_to_list(Name),
+    Rate = erlang:list_to_atom(NameStr ++ "_rate"),
+    Burst = erlang:list_to_atom(NameStr ++ "_burst"),
     [
-        {Type,
-            ?HOCON(?R_REF(?MODULE, bucket_opts), #{
-                desc => deprecated_desc(Type),
-                required => {false, recursively},
-                importance => importance_of_type(Type),
-                aliases => alias_of_type(Type)
-            })}
-     || Type <- Types
-    ] ++
-        [
-            {client,
-                ?HOCON(
-                    ?R_REF(?MODULE, ClientRef),
-                    #{
-                        desc => deprecated_desc(client),
-                        required => {false, recursively}
-                    }
-                )}
-        ].
-
-fields_of_bucket(Default) ->
-    [
-        {rate, ?HOCON(rate_type(), #{desc => deprecated_desc(rate), default => Default})},
-        {burst,
-            ?HOCON(burst(), #{
-                desc => deprecated_desc(burst),
-                default => <<"0">>,
-                importance => ?IMPORTANCE_HIDDEN,
-                aliases => [capacity]
+        {Rate,
+            ?HOCON(rate_type(), #{
+                desc => ?DESC(Rate),
+                required => false
             })},
-        {initial,
-            ?HOCON(initial(), #{
-                default => <<"0">>,
-                desc => deprecated_desc(initial),
-                importance => ?IMPORTANCE_HIDDEN
+        {Burst,
+            ?HOCON(burst_rate_type(), #{
+                desc => ?DESC(Burst),
+                required => false
             })}
+        | Schemas
     ].
-
-client_fields(Types) ->
-    [
-        {Type,
-            ?HOCON(?R_REF(client_opts), #{
-                desc => deprecated_desc(Type),
-                required => false,
-                importance => importance_of_type(Type),
-                aliases => alias_of_type(Type)
-            })}
-     || Type <- Types
-    ].
-
-importance_of_type(interval) ->
-    ?IMPORTANCE_HIDDEN;
-importance_of_type(message_routing) ->
-    ?IMPORTANCE_HIDDEN;
-importance_of_type(connection) ->
-    ?IMPORTANCE_HIDDEN;
-importance_of_type(_) ->
-    ?DEFAULT_IMPORTANCE.
-
-alias_of_type(messages) ->
-    [message_in];
-alias_of_type(bytes) ->
-    [bytes_in];
-alias_of_type(_) ->
-    [].
-
-deprecated_desc(_Field) ->
-    <<"Deprecated since v5.0.25">>.
 
 rate_type() ->
     typerefl:alias("string", rate()).
-
-burst_type() ->
-    typerefl:alias("string", burst()).
 
 burst_rate_type() ->
     typerefl:alias("string", burst_rate()).

@@ -67,7 +67,7 @@ init([]) ->
 
     Childs = [
         make_child(emqx_limiter_manager, worker),
-        make_child(emqx_limiter_server_sup, supervisor)
+        make_child(emqx_limiter_allocator_sup, supervisor)
     ],
 
     {ok, {SupFlags, Childs}}.
