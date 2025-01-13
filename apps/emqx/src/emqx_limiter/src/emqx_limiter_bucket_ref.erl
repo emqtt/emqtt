@@ -32,17 +32,15 @@
 
 -type bucket_ref() :: #{
     counter := counters:counters_ref(),
-    index := index()
+    index := emqx_limiter_allocator:index()
 }.
-
--type index() :: emqx_limiter_server:index().
 
 -elvis([{elvis_style, no_if_expression, disable}]).
 
 %%--------------------------------------------------------------------
 %%  API
 %%--------------------------------------------------------------------
--spec new(counters:counters_ref(), index()) -> bucket_ref().
+-spec new(counters:counters_ref(), emqx_limiter_allocator:index()) -> bucket_ref().
 new(Counter, Index) ->
     #{
         counter => Counter,
@@ -75,11 +73,9 @@ restore(Inc, #{counter := Counter, index := Index}) ->
     counters:add(Counter, Index, Inc).
 
 %% @doc get the number of tokens currently available
--spec available(bucket_ref()) -> emqx_limiter_decimal:decimal().
+-spec available(bucket_ref()) -> integer().
 available(#{counter := Counter, index := Index}) ->
-    counters:get(Counter, Index);
-available(infinity) ->
-    infinity.
+    counters:get(Counter, Index).
 
 %%--------------------------------------------------------------------
 %%  Internal functions

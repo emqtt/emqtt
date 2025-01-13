@@ -546,9 +546,9 @@ pre_config_update([?ROOT_KEY, _Type, _Name], {create, _NewConf}, _RawConf) ->
 pre_config_update([?ROOT_KEY, _Type, _Name], {update, _Request}, undefined) ->
     {error, not_found};
 pre_config_update([?ROOT_KEY, Type, Name], {update, Request}, RawConf) ->
-    RawConf = emqx_utils_maps:deep_merge(RawConf, Request),
-    ok = assert_zone_exists(RawConf),
-    {ok, convert_certs(Type, Name, RawConf)};
+    RawConf1 = emqx_utils_maps:deep_merge(RawConf, Request),
+    ok = assert_zone_exists(RawConf1),
+    {ok, convert_certs(Type, Name, RawConf1)};
 pre_config_update([?ROOT_KEY, _Type, _Name], {action, _Action, Updated}, RawConf) ->
     {ok, emqx_utils_maps:deep_merge(RawConf, Updated)};
 pre_config_update([?ROOT_KEY, _Type, _Name], ?MARK_DEL, _RawConf) ->

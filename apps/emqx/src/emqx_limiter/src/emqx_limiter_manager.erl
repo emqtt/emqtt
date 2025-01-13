@@ -46,10 +46,16 @@
     terminate/2
 ]).
 
+-export_type([limiter_name/0, bucket_ref/0]).
+
 -type bucket_ref() :: emqx_limiter_bucket_ref:bucket_ref().
--type limiter_name() :: {emqx_limiter:zone(), emqx_limiter:limiter_name()}.
--type tab_key() :: emqx_limiter:zone() | limiter_name().
+-type limiter_name_key() :: {emqx_limiter:zone(), emqx_limiter:limiter_name()}.
+-type tab_key() :: emqx_limiter:zone() | limiter_name_key().
 -type tab_value() :: pid() | bucket_ref().
+
+-type limiter_name() ::
+    emqx_limiter:limiter_name()
+    | retainer.
 
 -define(TAB, ?MODULE).
 
@@ -97,7 +103,7 @@ send(Name, Msg) ->
 %%  API
 %%--------------------------------------------------------------------
 
--spec find_bucket(emqx_limiter:zone(), emqx_limiter:limiter_name()) ->
+-spec find_bucket(emqx_limiter_allocator:allocator_name(), limiter_name()) ->
     {ok, bucket_ref()} | undefined.
 find_bucket(Zone, Name) ->
     case ets:lookup(?TAB, ?LIMITER_NAME(Zone, Name)) of
@@ -108,8 +114,8 @@ find_bucket(Zone, Name) ->
     end.
 
 -spec insert_bucket(
-    emqx_limiter:zone(),
-    emqx_limiter:limiter_name(),
+    emqx_limiter_allocator:allocator_name(),
+    limiter_name(),
     bucket_ref()
 ) -> boolean().
 insert_bucket(Zone, Name, Bucket) ->
@@ -118,7 +124,7 @@ insert_bucket(Zone, Name, Bucket) ->
         #?TAB{key = ?LIMITER_NAME(Zone, Name), value = Bucket}
     ).
 
--spec delete_bucket(emqx_limiter:zone(), emqx_limiter:limiter_name()) -> true.
+-spec delete_bucket(emqx_limiter_allocator:allocator_name(), limiter_name()) -> true.
 delete_bucket(Zone, Name) ->
     ets:delete(?TAB, ?LIMITER_NAME(Zone, Name)).
 

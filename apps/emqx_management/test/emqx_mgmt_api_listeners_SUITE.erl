@@ -426,8 +426,8 @@ t_update_listener_max_conn_rate(_Config) ->
     ListenerId = <<"tcp:default">>,
     Path = emqx_mgmt_api_test_util:api_path(["listeners", ListenerId]),
     Conf = request(get, Path, [], []),
-    %% Check that default is infinity
-    ?assertMatch(#{<<"max_conn_rate">> := <<"infinity">>}, Conf),
+    %% check there is no limiter by default
+    ?assertNotMatch(#{<<"max_conn_rate">> := _}, Conf),
     %% Update to infinity
     UpdateConfToInfinity = Conf#{<<"max_conn_rate">> => <<"infinity">>},
     ?assertMatch(

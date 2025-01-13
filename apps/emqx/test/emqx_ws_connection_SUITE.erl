@@ -58,7 +58,6 @@ init_per_testcase(TestCase, Config) when
     TestCase =/= t_ws_pingreq_before_connected,
     TestCase =/= t_ws_non_check_origin
 ->
-    add_bucket(),
     %% Meck Cm
     ok = meck:new(emqx_cm, [passthrough, no_history, no_link]),
     ok = meck:expect(emqx_cm, mark_channel_connected, fun(_) -> ok end),
@@ -72,12 +71,10 @@ init_per_testcase(TestCase, Config) when
     ok = meck:expect(cowboy_req, parse_cookies, fun(_) -> error(badarg) end),
     Config;
 init_per_testcase(t_ws_non_check_origin, Config) ->
-    add_bucket(),
     emqx_config:put_listener_conf(ws, default, [websocket, check_origin_enable], false),
     emqx_config:put_listener_conf(ws, default, [websocket, check_origins], []),
     Config;
 init_per_testcase(_TestCase, Config) ->
-    add_bucket(),
     Config.
 
 end_per_testcase(TestCase, _Config) when
@@ -87,14 +84,12 @@ end_per_testcase(TestCase, _Config) when
     TestCase =/= t_ws_non_check_origin,
     TestCase =/= t_ws_pingreq_before_connected
 ->
-    del_bucket(),
     meck:unload([
         emqx_cm,
         cowboy_req
     ]),
     ok;
 end_per_testcase(_, Config) ->
-    del_bucket(),
     Config.
 
 %%--------------------------------------------------------------------
@@ -134,7 +129,7 @@ t_header(_) ->
         #{},
         #{
             zone => default,
-            limiter => limiter_cfg(),
+            limiter => undefined,
             listener => {ws, default}
         }
     ]),
@@ -150,11 +145,6 @@ t_header(_) ->
         peername := {{100, 100, 100, 100}, 1000},
         sockstate := running
     } = SockInfo.
-
-t_info_limiter(_) ->
-    Limiter = init_limiter(),
-    St = st(#{limiter => Limiter}),
-    ?assertEqual(Limiter, ?ws_conn:info(limiter, St)).
 
 t_info_channel(_) ->
     #{conn_state := connected} = ?ws_conn:info(channel, st()).
@@ -303,7 +293,7 @@ t_ws_non_check_origin(_) ->
     ).
 
 t_init(_) ->
-    Opts = #{listener => {ws, default}, zone => default, limiter => limiter_cfg()},
+    Opts = #{listener => {ws, default}, zone => default, limiter => undefined},
     ok = meck:expect(cowboy_req, parse_header, fun(_, req) -> undefined end),
     ok = meck:expect(cowboy_req, reply, fun(_, Req) -> Req end),
     {ok, req, _} = ?ws_conn:init(req, Opts),
@@ -396,20 +386,6 @@ t_websocket_info_deliver(_) ->
     {[{binary, _Pub1}, {binary, _Pub2}], _St} =
         websocket_info({deliver, <<"#">>, Msg0}, st()).
 
-t_websocket_info_timeout_limiter(_) ->
-    Ref = make_ref(),
-    {ok, Rate} = emqx_limiter_schema:to_rate("50MB"),
-    LimiterT = init_limiter(#{
-        bytes => bucket_cfg(),
-        messages => bucket_cfg(),
-        client => #{bytes => client_cfg(Rate)}
-    }),
-    Next = fun emqx_ws_connection:when_msg_in/3,
-    Limiter = emqx_limiter_container:set_retry_context({retry, [], [], Next}, LimiterT),
-    Event = {timeout, Ref, limit_timeout},
-    {ok, St} = websocket_info(Event, st(#{limiter => Limiter})),
-    ?assertEqual([], ?ws_conn:info(postponed, St)).
-
 t_websocket_info_timeout_keepalive(_) ->
     {ok, _St} = websocket_info({timeout, make_ref(), keepalive}, st()).
 
@@ -464,27 +440,6 @@ t_handle_timeout_emit_stats(_) ->
         TRef, emit_stats, st(#{stats_timer => TRef})
     ),
     ?assertEqual(undefined, ?ws_conn:info(stats_timer, St)).
-
-t_ensure_rate_limit(_) ->
-    {ok, Rate} = emqx_limiter_schema:to_rate("50MB"),
-    Limiter = init_limiter(#{
-        bytes => bucket_cfg(),
-        messages => bucket_cfg(),
-        client => #{bytes => client_cfg(Rate)}
-    }),
-    St = st(#{limiter => Limiter}),
-
-    %% must bigger than value in emqx_ratelimit_SUITE
-    {ok, Need} = emqx_limiter_schema:to_capacity("1GB"),
-    St1 = ?ws_conn:check_limiter(
-        [{Need, bytes}],
-        [],
-        fun(_, _, S) -> S end,
-        [],
-        St
-    ),
-    ?assertEqual(blocked, ?ws_conn:info(sockstate, St1)),
-    ?assertEqual([{active, false}], ?ws_conn:info(postponed, St1)).
 
 t_parse_incoming(_) ->
     {Packets, St} = ?ws_conn:parse_incoming(<<48, 3>>, [], st()),
@@ -554,7 +509,7 @@ st(InitFields) when is_map(InitFields) ->
         #{
             zone => default,
             listener => {ws, default},
-            limiter => limiter_cfg()
+            limiter => undefined
         }
     ]),
     maps:fold(
@@ -600,7 +555,7 @@ channel(InitFields) ->
         emqx_channel:init(ConnInfo, #{
             zone => default,
             listener => {ws, default},
-            limiter => limiter_cfg()
+            limiter => undefined
         }),
         maps:merge(
             #{
@@ -669,42 +624,3 @@ ws_client(State) ->
     after 5000 ->
         ct:fail(ws_timeout)
     end.
-
--define(LIMITER_ID, 'ws:default').
-
-init_limiter() ->
-    init_limiter(limiter_cfg()).
-
-init_limiter(LimiterCfg) ->
-    emqx_limiter_container:get_limiter_by_types(?LIMITER_ID, [bytes, messages], LimiterCfg).
-
-limiter_cfg() ->
-    Cfg = bucket_cfg(),
-    Client = client_cfg(),
-    #{bytes => Cfg, messages => Cfg, client => #{bytes => Client, messages => Client}}.
-
-client_cfg() ->
-    client_cfg(infinity).
-
-client_cfg(Rate) ->
-    #{
-        rate => Rate,
-        initial => 0,
-        burst => 0,
-        low_watermark => 1,
-        divisible => false,
-        max_retry_time => timer:seconds(5),
-        failure_strategy => force
-    }.
-
-bucket_cfg() ->
-    #{rate => infinity, initial => 0, burst => 0}.
-
-add_bucket() ->
-    Cfg = bucket_cfg(),
-    emqx_limiter_server:add_bucket(?LIMITER_ID, bytes, Cfg),
-    emqx_limiter_server:add_bucket(?LIMITER_ID, messages, Cfg).
-
-del_bucket() ->
-    emqx_limiter_server:del_bucket(?LIMITER_ID, bytes),
-    emqx_limiter_server:del_bucket(?LIMITER_ID, messages).

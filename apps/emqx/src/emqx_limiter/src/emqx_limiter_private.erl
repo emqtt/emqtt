@@ -28,6 +28,7 @@
     module := ?MODULE,
     tokens := number(),
     rate := number(),
+    burst := number(),
     capacity := number(),
     lasttime := millisecond(),
     atom => any()
@@ -45,9 +46,10 @@ create(#{rate := Rate, burst := Burst}) ->
     #{
         module => ?MODULE,
         tokens => Rate,
-        lasttime => ?NOW,
+        rate => Rate,
+        burst => Burst,
         capacity => emqx_limiter:calc_capacity(Rate),
-        burst => Burst
+        lasttime => ?NOW
     }.
 
 check(Need, Limiter) ->

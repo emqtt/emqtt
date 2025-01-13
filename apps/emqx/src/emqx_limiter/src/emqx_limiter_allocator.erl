@@ -47,7 +47,7 @@
     capacity := capacity(),
     counter := counters:counters_ref(),
     index := index(),
-    correction := emqx_limiter_decimal:zero_or_float()
+    correction := float()
 }.
 
 -type allocator_name() :: emqx_limiter:zone() | binary().
@@ -119,8 +119,9 @@ handle_call(
 handle_call(
     {delete_bucket, Name},
     _From,
-    #{buckets := Buckets} = State
+    #{name := AllocatorName, buckets := Buckets} = State
 ) ->
+    emqx_limiter_manager:delete_bucket(AllocatorName, Name),
     {reply, ok, State#{buckets := maps:remove(Name, Buckets)}};
 handle_call(Req, _From, State) ->
     ?SLOG(error, #{msg => "unexpected_call", call => Req}),

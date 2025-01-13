@@ -40,7 +40,7 @@
 }.
 
 -type zone() :: atom().
--type limiter_name() :: atom().
+-type limiter_name() :: max_conn | messages | bytes.
 
 -define(DEFAULT_ALLOC_INTERVAL, 100).
 

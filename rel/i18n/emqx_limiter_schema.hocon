@@ -47,4 +47,7 @@ mqtt.desc:
 alloc_interval.desc:
 """Token allocation interval for shared limiter."""
 
+burst.desc:
+"""How many tokens are allowed when the rate is exceeded."""
+
 }

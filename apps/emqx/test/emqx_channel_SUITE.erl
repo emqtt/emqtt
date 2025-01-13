@@ -485,8 +485,9 @@ t_process_unsubscribe(_) ->
     {[?RC_SUCCESS], _Channel} = emqx_channel:post_process_unsubscribe(TopicFilters, #{}, channel()).
 
 t_quota_qos0(_) ->
-    esockd_limiter:start_link(),
-    add_bucket(),
+    {ok, Rate} = emqx_limiter_schema:to_rate("1/s"),
+    emqx_limiter_allocator:add_bucket(messages, #{rate => Rate, burst => 0}),
+    timer:sleep(1000),
     ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 4}}] end),
     Chann = channel(#{conn_state => connected, quota => quota()}),
     Pub = ?PUBLISH_PACKET(?QOS_0, <<"topic">>, undefined, <<"payload">>),
@@ -497,33 +498,33 @@ t_quota_qos0(_) ->
     {ok, Chann2} = emqx_channel:handle_in(Pub, Chann1),
     ?assertEqual(M1 + 1, emqx_metrics:val(Metric)),
     timer:sleep(1000),
-    {ok, Chann3} = emqx_channel:handle_timeout(ref, expire_quota_limit, Chann2),
-    {ok, _} = emqx_channel:handle_in(Pub, Chann3),
+    {ok, _} = emqx_channel:handle_in(Pub, Chann2),
     %% No longer exceeds quota
     ?assertEqual(M1 + 1, emqx_metrics:val(Metric)),
-
-    del_bucket(),
-    esockd_limiter:stop().
+    emqx_limiter_allocator:delete_bucket(messages),
+    ok.
 
 t_quota_qos1(_) ->
-    esockd_limiter:start_link(),
-    add_bucket(),
+    {ok, Rate} = emqx_limiter_schema:to_rate("1/s"),
+    emqx_limiter_allocator:add_bucket(messages, #{rate => Rate, burst => 0}),
+    timer:sleep(1000),
     ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 4}}] end),
     Chann = channel(#{conn_state => connected, quota => quota()}),
     Pub = ?PUBLISH_PACKET(?QOS_1, <<"topic">>, 1, <<"payload">>),
     %% Quota per connections
     {ok, ?PUBACK_PACKET(1, ?RC_SUCCESS), Chann1} = emqx_channel:handle_in(Pub, Chann),
     {ok, ?PUBACK_PACKET(1, ?RC_QUOTA_EXCEEDED), Chann2} = emqx_channel:handle_in(Pub, Chann1),
-    {ok, Chann3} = emqx_channel:handle_timeout(ref, expire_quota_limit, Chann2),
-    {ok, ?PUBACK_PACKET(1, ?RC_SUCCESS), Chann4} = emqx_channel:handle_in(Pub, Chann3),
+    timer:sleep(1000),
+    {ok, ?PUBACK_PACKET(1, ?RC_SUCCESS), Chann3} = emqx_channel:handle_in(Pub, Chann2),
     %% Quota in overall
-    {ok, ?PUBACK_PACKET(1, ?RC_QUOTA_EXCEEDED), _} = emqx_channel:handle_in(Pub, Chann4),
-    del_bucket(),
-    esockd_limiter:stop().
+    {ok, ?PUBACK_PACKET(1, ?RC_QUOTA_EXCEEDED), _} = emqx_channel:handle_in(Pub, Chann3),
+    emqx_limiter_allocator:delete_bucket(messages),
+    ok.
 
 t_quota_qos2(_) ->
-    esockd_limiter:start_link(),
-    add_bucket(),
+    {ok, Rate} = emqx_limiter_schema:to_rate("1/s"),
+    emqx_limiter_allocator:add_bucket(messages, #{rate => Rate, burst => 0}),
+    timer:sleep(1000),
     ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 4}}] end),
     Chann = channel(#{conn_state => connected, quota => quota()}),
     Pub1 = ?PUBLISH_PACKET(?QOS_2, <<"topic">>, 1, <<"payload">>),
@@ -533,12 +534,33 @@ t_quota_qos2(_) ->
     %% Quota per connections
     {ok, ?PUBREC_PACKET(1, ?RC_SUCCESS), Chann1} = emqx_channel:handle_in(Pub1, Chann),
     {ok, ?PUBREC_PACKET(2, ?RC_QUOTA_EXCEEDED), Chann2} = emqx_channel:handle_in(Pub2, Chann1),
-    {ok, Chann3} = emqx_channel:handle_timeout(ref, expire_quota_limit, Chann2),
-    {ok, ?PUBREC_PACKET(3, ?RC_SUCCESS), Chann4} = emqx_channel:handle_in(Pub3, Chann3),
+    timer:sleep(1000),
+    {ok, ?PUBREC_PACKET(3, ?RC_SUCCESS), Chann3} = emqx_channel:handle_in(Pub3, Chann2),
     %% Quota in overall
-    {ok, ?PUBREC_PACKET(4, ?RC_QUOTA_EXCEEDED), _} = emqx_channel:handle_in(Pub4, Chann4),
-    del_bucket(),
-    esockd_limiter:stop().
+    {ok, ?PUBREC_PACKET(4, ?RC_QUOTA_EXCEEDED), _} = emqx_channel:handle_in(Pub4, Chann3),
+    emqx_limiter_allocator:delete_bucket(messages),
+    ok.
+
+t_quota_bytes(_) ->
+    {ok, Rate} = emqx_limiter_schema:to_rate("7/s"),
+    emqx_limiter_allocator:add_bucket(bytes, #{rate => Rate, burst => 0}),
+    timer:sleep(1000),
+    ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 4}}] end),
+    Chann = channel(#{conn_state => connected, quota => quota()}),
+    Pub = ?PUBLISH_PACKET(?QOS_1, <<"topic">>, 1, <<"payload">>),
+    %% Quota per connections
+    {ok, ?PUBACK_PACKET(1, ?RC_SUCCESS), Chann1} = emqx_channel:handle_in(Pub, Chann),
+    {ok, ?PUBACK_PACKET(1, ?RC_QUOTA_EXCEEDED), Chann2} = emqx_channel:handle_in(Pub, Chann1),
+    timer:sleep(1000),
+    {ok, ?PUBACK_PACKET(1, ?RC_SUCCESS), Chann3} = emqx_channel:handle_in(Pub, Chann2),
+    %% Quota in overall
+    {ok, ?PUBACK_PACKET(1, ?RC_QUOTA_EXCEEDED), _} = emqx_channel:handle_in(Pub, Chann3),
+    emqx_limiter_allocator:delete_bucket(bytes),
+    ?assertEqual(
+        undefined,
+        emqx_limiter_manager:find_bucket(emqx_limiter:default_alloc_interval(), bytes)
+    ),
+    ok.
 
 t_mount_will_msg(_) ->
     Self = self(),
@@ -1128,31 +1150,9 @@ mock_cm_open_session() ->
 
 %% conn: 5/s; overall: 10/s
 quota() ->
-    emqx_limiter_container:get_limiter_by_types(?MODULE, [message_routing], limiter_cfg()).
-
-limiter_cfg() ->
-    Client = #{
-        rate => 5,
-        initial => 0,
-        burst => 0,
-        low_watermark => 1,
-        divisible => false,
-        max_retry_time => timer:seconds(5),
-        failure_strategy => force
-    },
-    #{
-        message_routing => bucket_cfg(),
-        client => #{message_routing => Client}
-    }.
-
-bucket_cfg() ->
-    #{rate => 10, initial => 0, burst => 0}.
-
-add_bucket() ->
-    emqx_limiter_server:add_bucket(?MODULE, message_routing, bucket_cfg()).
-
-del_bucket() ->
-    emqx_limiter_server:del_bucket(?MODULE, message_routing).
+    emqx_limiter_container:create_by_names(
+        [bytes, messages], #{}, emqx_limiter:internal_allocator()
+    ).
 
 v4(Channel) ->
     ConnInfo = emqx_channel:info(conninfo, Channel),

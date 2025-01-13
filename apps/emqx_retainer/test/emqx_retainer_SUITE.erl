@@ -573,17 +573,7 @@ t_flow_control(_) ->
     ct:sleep(100),
     Begin = erlang:system_time(millisecond),
     {ok, #{}, [0]} = emqtt:subscribe(C1, <<"retained/#">>, [{qos, 0}, {rh, 0}]),
-    ?assertEqual(3, length(receive_messages(3))),
-    End = erlang:system_time(millisecond),
-
-    Diff = End - Begin,
-
-    ?assert(
-        Diff > timer:seconds(2.1) andalso Diff < timer:seconds(4),
-        lists:flatten(io_lib:format("Diff is :~p~n", [Diff]))
-    ),
-
-    ok = emqtt:disconnect(C1),
+    ?assertEqual(2, length(receive_messages(3))),
     ok.
 
 t_publish_rate_limit(_) ->
@@ -821,6 +811,7 @@ t_only_for_coverage(_) ->
     ok.
 
 t_reindex(_) ->
+    remove_delivery_rate(),
     {ok, C} = emqtt:start_link([{clean_start, true}, {proto_ver, v5}]),
     {ok, _} = emqtt:connect(C),
 
@@ -894,7 +885,9 @@ t_reindex(_) ->
                 )
             )
         end
-    ).
+    ),
+    reset_delivery_rate_to_default(),
+    ok.
 
 t_get_basic_usage_info(_Config) ->
     ?assertEqual(#{retained_messages => 0}, emqx_retainer:get_basic_usage_info()),
@@ -1043,7 +1036,7 @@ t_compatibility_for_deliver_rate(_) ->
                     <<"flow_control">> := #{
                         <<"batch_deliver_number">> := 0,
                         <<"batch_read_number">> := 0,
-                        <<"batch_deliver_limiter">> := #{<<"rate">> := infinity}
+                        <<"batch_deliver_limiter">> := 0
                     }
                 }
         },
@@ -1058,29 +1051,11 @@ t_compatibility_for_deliver_rate(_) ->
                     <<"flow_control">> := #{
                         <<"batch_deliver_number">> := 1000,
                         <<"batch_read_number">> := 1000,
-                        <<"batch_deliver_limiter">> := #{<<"client">> := #{<<"rate">> := 100.0}}
+                        <<"batch_deliver_limiter">> := 1.0
                     }
                 }
         },
         Parser(R1)
-    ),
-
-    R2 = <<
-        "retainer{deliver_rate = \"1000/s\"",
-        "flow_control.batch_deliver_limiter.rate = \"500/s\"}"
-    >>,
-    ?assertMatch(
-        #{
-            <<"retainer">> :=
-                #{
-                    <<"flow_control">> := #{
-                        <<"batch_deliver_number">> := 1000,
-                        <<"batch_read_number">> := 1000,
-                        <<"batch_deliver_limiter">> := #{<<"client">> := #{<<"rate">> := 100.0}}
-                    }
-                }
-        },
-        Parser(R2)
     ),
 
     DeliveryInf = <<"retainer.delivery_rate = \"infinity\"">>,
@@ -1091,7 +1066,7 @@ t_compatibility_for_deliver_rate(_) ->
                     <<"flow_control">> := #{
                         <<"batch_deliver_number">> := 0,
                         <<"batch_read_number">> := 0,
-                        <<"batch_deliver_limiter">> := #{<<"rate">> := infinity}
+                        <<"batch_deliver_limiter">> := 0
                     }
                 }
         },
@@ -1157,41 +1132,6 @@ with_conf(CTConfig, ConfMod, Case) ->
             emqx_retainer:update_config(Conf),
             erlang:raise(Type, Error, Strace)
     end.
-
-make_limiter_cfg(Rate) ->
-    make_limiter_cfg(Rate, #{}).
-
-make_limiter_cfg(Rate, ClientOpts) ->
-    Client = maps:merge(
-        #{
-            rate => Rate,
-            initial => 0,
-            burst => 0,
-            low_watermark => 1,
-            divisible => false,
-            max_retry_time => timer:seconds(5),
-            failure_strategy => force
-        },
-        ClientOpts
-    ),
-    #{client => Client, rate => Rate, initial => 0, burst => 0}.
-
-make_limiter_json(Rate) ->
-    Client = #{
-        <<"rate">> => Rate,
-        <<"initial">> => 0,
-        <<"burst">> => <<"0">>,
-        <<"low_watermark">> => 0,
-        <<"divisible">> => <<"false">>,
-        <<"max_retry_time">> => <<"5s">>,
-        <<"failure_strategy">> => <<"force">>
-    },
-    #{
-        <<"client">> => Client,
-        <<"rate">> => <<"infinity">>,
-        <<"initial">> => 0,
-        <<"burst">> => <<"0">>
-    }.
 
 publish(Client, Topic, Payload, Opts, TCConfig) ->
     PublishOpts = publish_opts(TCConfig),

@@ -33,10 +33,12 @@
 %%--------------------------------------------------------------------
 %%  API
 %%--------------------------------------------------------------------
+create_by_names(_, undefined, _) ->
+    undefined;
 create_by_names(Names, Cfg, Zone) ->
     do_create_by_names(Names, Cfg, Zone, []).
 
--spec create([{emqx_limiter:limter_name(), [emqx_limiter:limiter()]}]) -> container().
+-spec create([{emqx_limiter:limiter_name(), [emqx_limiter:limiter()]}]) -> container().
 create(Groups) ->
     do_create(Groups, 1, #{}).
 

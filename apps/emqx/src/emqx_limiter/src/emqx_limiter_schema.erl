@@ -36,7 +36,6 @@
 ]).
 
 -export([
-    mqtt_limiter_schema/0,
     mqtt_limiter_names/0
 ]).
 
@@ -65,7 +64,7 @@
 namespace() -> limiter.
 
 roots() ->
-    [limiter].
+    [].
 
 fields(mqtt_with_interval) ->
     fields(mqtt) ++
@@ -90,9 +89,6 @@ desc(_) ->
 %%--------------------------------------------------------------------
 %% API
 %%--------------------------------------------------------------------
-mqtt_limiter_schema() ->
-    fields(limiter).
-
 mqtt_limiter_names() ->
     [
         max_conn,
@@ -231,7 +227,7 @@ make_mqtt_limiters_schema(Name, Schemas) ->
             })},
         {Burst,
             ?HOCON(burst_rate_type(), #{
-                desc => ?DESC(Burst),
+                desc => ?DESC(burst),
                 required => false
             })}
         | Schemas
