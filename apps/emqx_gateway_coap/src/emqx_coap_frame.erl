@@ -490,7 +490,7 @@ class_code_to_method({5, 05}) -> {error, proxying_not_supported};
 class_code_to_method(_) -> undefined.
 
 format(Msg) ->
-    io_lib:format("~p", [Msg]).
+    io_lib:format("~0p", [Msg]).
 
 type(_) ->
     coap.
