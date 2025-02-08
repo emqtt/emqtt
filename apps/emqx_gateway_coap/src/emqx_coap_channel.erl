@@ -210,9 +210,9 @@ handle_deliver(
 
 handle_timeout(_, {keepalive, NewVal}, #channel{keepalive = KeepAlive} = Channel) ->
     case emqx_keepalive:check(NewVal, KeepAlive) of
-        {ok, NewKeepAlive} ->
+        {ok, _} ->
             Channel2 = ensure_keepalive_timer(fun make_timer/4, Channel),
-            {ok, Channel2#channel{keepalive = NewKeepAlive}};
+            {ok, Channel2};
         {error, timeout} ->
             {shutdown, timeout, ensure_disconnected(keepalive_timeout, Channel)}
     end;
