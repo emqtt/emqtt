@@ -256,7 +256,7 @@ t_case_exproto(_) ->
             ?FUNCTOR(Sock, Mod:close(Sock)),
             fun(Sock) ->
                 Client = #{
-                    proto_name => <<"demo">>,
+                    proto_name => <<"exproto">>,
                     proto_ver => <<"v0.1">>,
                     clientid => <<"test_client_1">>,
                     username => Username

@@ -793,6 +793,8 @@ global_chain(lwm2m) ->
     'lwm2m:global';
 global_chain(stomp) ->
     'stomp:global';
+global_chain(exproto) ->
+    'exproto:global';
 global_chain(_) ->
     'unknown:global'.
 
