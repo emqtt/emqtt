@@ -19,6 +19,7 @@
 -include_lib("emqx/include/logger.hrl").
 -include_lib("emqx/include/emqx.hrl").
 -include_lib("emqx/include/emqx_mqtt.hrl").
+-include_lib("snabbkaffe/include/trace.hrl").
 
 -export([
     config/1,
@@ -45,6 +46,7 @@ config(#{remote := RC = #{}} = Conf) ->
 -spec send(pid(), emqx_trace:rendered_action_template_ctx(), message(), egress()) ->
     ok | {error, {unrecoverable_error, term()}}.
 send(Pid, TraceRenderedCTX, MsgIn, Egress) ->
+    ?tp("mqtt_action_about_to_publish", #{}),
     try
         emqtt:publish(Pid, export_msg(MsgIn, Egress, TraceRenderedCTX))
     catch
@@ -55,6 +57,7 @@ send(Pid, TraceRenderedCTX, MsgIn, Egress) ->
 -spec send_async(pid(), emqx_trace:rendered_action_template_ctx(), message(), callback(), egress()) ->
     {ok, pid()} | {error, {unrecoverable_error, term()}}.
 send_async(Pid, TraceRenderedCTX, MsgIn, Callback, Egress) ->
+    ?tp("mqtt_action_about_to_publish", #{}),
     try
         ok = emqtt:publish_async(
             Pid, export_msg(MsgIn, Egress, TraceRenderedCTX), _Timeout = infinity, Callback
