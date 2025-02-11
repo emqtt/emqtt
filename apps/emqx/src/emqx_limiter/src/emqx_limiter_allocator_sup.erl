@@ -113,15 +113,14 @@ has_limiter(Zone) ->
         undefined ->
             false;
         Cfg ->
-            has_any_rate(Cfg)
+            has_any_limiters_configured(Cfg)
     end.
 
-has_any_rate(Cfg) ->
+has_any_limiters_configured(Cfg) ->
     Names = emqx_limiter_schema:mqtt_limiter_names(),
     lists:any(
         fun(Name) ->
-            {ok, RateKey} = emqx_limiter:to_rate_key(Name),
-            maps:get(RateKey, Cfg, infinity) =/= infinity
+            emqx_limiter:get_config(Name, Cfg) =/= undefined
         end,
         Names
     ).

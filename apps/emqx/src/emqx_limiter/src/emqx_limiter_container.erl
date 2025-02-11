@@ -54,7 +54,7 @@ check(Needs, Container) ->
 %%--------------------------------------------------------------------
 do_create_by_names([Name | Names], Cfg, Zone, Acc) ->
     Private =
-        case emqx_limiter:get_cfg(Name, Cfg) of
+        case emqx_limiter:get_config(Name, Cfg) of
             undefined ->
                 [];
             LimiterCfg ->

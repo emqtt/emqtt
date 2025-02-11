@@ -211,13 +211,10 @@ init_state(Zone, #{alloc_interval := Interval} = Cfg) ->
     }.
 
 init_buckets([Name | Names], Zone, Counter, #{alloc_interval := Interval} = Cfg, Buckets) ->
-    {ok, RateKey} = emqx_limiter:to_rate_key(Name),
-    {ok, BurstKey} = emqx_limiter:to_burst_key(Name),
-    case maps:get(RateKey, Cfg, infinity) of
-        infinity ->
+    case emqx_limiter:get_config(Name, Cfg) of
+        undefined ->
             init_buckets(Names, Zone, Counter, Cfg, Buckets);
-        Rate ->
-            Burst = maps:get(BurstKey, Cfg, 0),
+        #{rate := Rate, burst := Burst} ->
             Bucket = do_create_bucket(
                 Name, Rate, Burst, Zone, Counter, Interval, maps:size(Buckets) + 1
             ),

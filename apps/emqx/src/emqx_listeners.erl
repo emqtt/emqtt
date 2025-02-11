@@ -787,7 +787,7 @@ zone(Opts) ->
     maps:get(zone, Opts, undefined).
 
 limiter(Opts) ->
-    emqx_limiter:get_names_cfg([?LIMITER_BYTES_IN, ?LIMITER_MESSAGE_IN], Opts).
+    emqx_limiter:filter_limiter_fields([?LIMITER_BYTES_IN, ?LIMITER_MESSAGE_IN], Opts).
 
 diff_confs(NewConfs, OldConfs) ->
     emqx_utils:diff_lists(

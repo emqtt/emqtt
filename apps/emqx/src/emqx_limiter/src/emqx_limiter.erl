@@ -22,7 +22,10 @@
     restore/2
 ]).
 
--export([get_cfg/2, get_names_cfg/2]).
+-export([
+    get_config/2,
+    filter_limiter_fields/2
+]).
 
 -export([
     internal_allocator/0,
@@ -30,8 +33,6 @@
     calc_capacity/1,
     calc_capacity/2
 ]).
-
--export([to_rate_key/1, to_burst_key/1]).
 
 -export_type([type/0, limiter/0, zone/0, limiter_name/0]).
 
@@ -69,7 +70,19 @@ check(Need, #{module := Mod} = Limiter) ->
 restore(Consumed, #{module := Mod} = Limiter) ->
     Mod:restore(Consumed, Limiter).
 
-get_cfg(Name, Cfg) ->
+%% @doc get the config of a limiter from a config map of different parameters.
+%%
+%% The convention is as follows:
+%% Limiter with name `x` is configured with `x_rate` and `x_burst` keys in a config map.
+%%
+%% Having a config like `Config = #{foo => bar,  x_rate => 10, x_burst => 100}`
+%% means that the limiter `x` has a rate of 10 tokens per interval and a burst of 100 tokens.
+%%
+%% The `get_config(x, Config)` function will return
+%% limiter config `#{rate => 10, burst => 100}` for the limiter `x`.
+%%
+%% If the limiter `x` is not configured, the function will return `undefined`.
+get_config(Name, Cfg) ->
     {ok, RateKey} = to_rate_key(Name),
     case maps:get(RateKey, Cfg, infinity) of
         infinity ->
@@ -80,7 +93,11 @@ get_cfg(Name, Cfg) ->
             #{rate => Rate, burst => Burst}
     end.
 
-get_names_cfg(Names, Cfg) ->
+%% @doc filter limiter-related fields from a config map.
+%%
+%% E.g. `filter_limiter_fields([x, y], #{x_rate => 10, y_burst => 20, a => 1, b => 2})`
+%% will return `#{x_rate => 10, y_burst => 20}`.
+filter_limiter_fields(Names, Cfg) ->
     Keys = lists:foldl(
         fun(Name, Acc) ->
             {ok, RateKey} = to_rate_key(Name),
@@ -107,6 +124,10 @@ calc_capacity(Rate) ->
 calc_capacity(Rate, Interval) ->
     erlang:ceil(Rate * erlang:max(Interval, 1000)).
 
+%%--------------------------------------------------------------------
+%%  Internal functions
+%%--------------------------------------------------------------------
+
 to_rate_key(Name) ->
     NameStr = emqx_utils_conv:str(Name),
     emqx_utils:safe_to_existing_atom(NameStr ++ "_rate").
@@ -114,7 +135,3 @@ to_rate_key(Name) ->
 to_burst_key(Name) ->
     NameStr = emqx_utils_conv:str(Name),
     emqx_utils:safe_to_existing_atom(NameStr ++ "_burst").
-
-%%--------------------------------------------------------------------
-%%  Internal functions
-%%--------------------------------------------------------------------
