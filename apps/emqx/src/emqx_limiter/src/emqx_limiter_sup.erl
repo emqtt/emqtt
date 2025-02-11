@@ -28,17 +28,6 @@
 %%  API functions
 %%--------------------------------------------------------------------
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the supervisor
-%% @end
-%%--------------------------------------------------------------------
--spec start_link() ->
-    {ok, Pid :: pid()}
-    | {error, {already_started, Pid :: pid()}}
-    | {error, {shutdown, term()}}
-    | {error, term()}
-    | ignore.
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
@@ -46,18 +35,6 @@ start_link() ->
 %%  Supervisor callbacks
 %%--------------------------------------------------------------------
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever a supervisor is started using supervisor:start_link/[2,3],
-%% this function is called by the new process to find out about
-%% restart strategy, maximum restart intensity, and child
-%% specifications.
-%% @end
-%%--------------------------------------------------------------------
--spec init(Args :: term()) ->
-    {ok, {SupFlags :: supervisor:sup_flags(), [ChildSpec :: supervisor:child_spec()]}}
-    | ignore.
 init([]) ->
     SupFlags = #{
         strategy => one_for_one,
@@ -66,13 +43,13 @@ init([]) ->
     },
 
     Childs = [
-        make_child(emqx_limiter_manager, worker),
-        make_child(emqx_limiter_allocator_sup, supervisor)
+        child_spec(emqx_limiter_manager, worker),
+        child_spec(emqx_limiter_allocator_sup, supervisor)
     ],
 
     {ok, {SupFlags, Childs}}.
 
-make_child(Mod, Type) ->
+child_spec(Mod, Type) ->
     #{
         id => Mod,
         start => {Mod, start_link, []},
