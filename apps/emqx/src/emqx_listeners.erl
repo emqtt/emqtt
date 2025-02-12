@@ -200,8 +200,8 @@ is_running(quic, ListenerId, _Conf) ->
             false
     end.
 
-current_conns(ID, ListenOn) ->
-    {ok, #{type := Type, name := Name}} = parse_listener_id(ID),
+current_conns(Id, ListenOn) ->
+    {ok, #{type := Type, name := Name}} = parse_listener_id(Id),
     current_conns(Type, Name, ListenOn).
 
 current_conns(Type, Name, ListenOn) when Type == tcp; Type == ssl ->
@@ -214,8 +214,8 @@ current_conns(quic, Name, _ListenOn) ->
 current_conns(_, _, _) ->
     {error, not_support}.
 
-max_conns(ID, ListenOn) ->
-    {ok, #{type := Type, name := Name}} = parse_listener_id(ID),
+max_conns(Id, ListenOn) ->
+    {ok, #{type := Type, name := Name}} = parse_listener_id(Id),
     max_conns(Type, Name, ListenOn).
 
 max_conns(Type, Name, ListenOn) when Type == tcp; Type == ssl ->
@@ -225,8 +225,8 @@ max_conns(Type, Name, _ListenOn) when Type =:= ws; Type =:= wss ->
 max_conns(_, _, _) ->
     {error, not_support}.
 
-shutdown_count(ID, ListenOn) ->
-    {ok, #{type := Type, name := Name}} = parse_listener_id(ID),
+shutdown_count(Id, ListenOn) ->
+    {ok, #{type := Type, name := Name}} = parse_listener_id(Id),
     shutdown_count(Type, Name, ListenOn).
 
 shutdown_count(Type, Name, ListenOn) when Type == tcp; Type == ssl ->
