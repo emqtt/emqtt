@@ -43,7 +43,7 @@ init([]) ->
     },
 
     Childs = [
-        child_spec(emqx_limiter_manager, worker),
+        child_spec(emqx_limiter_bucket_registry, worker),
         child_spec(emqx_limiter_allocator_sup, supervisor)
     ],
 

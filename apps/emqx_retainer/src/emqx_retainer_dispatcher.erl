@@ -254,9 +254,7 @@ take(N, [H | T], Count, Acc) ->
     take(N - 1, T, Count + 1, [H | Acc]).
 
 get_limiter() ->
-    case
-        emqx_limiter_manager:find_bucket(emqx_limiter:internal_allocator(), ?DISPATCHER_LIMITER_ID)
-    of
+    case emqx_limiter_bucket_registry:find_bucket(?DISPATCHER_LIMITER_ID) of
         undefined ->
             undefined;
         {ok, Ref} ->

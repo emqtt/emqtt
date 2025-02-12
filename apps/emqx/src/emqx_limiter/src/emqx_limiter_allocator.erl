@@ -46,7 +46,7 @@
     burst => rate(),
     capacity := capacity(),
     counter := counters:counters_ref(),
-    index := index(),
+    last_used_index := index(),
     correction := float()
 }.
 
@@ -56,10 +56,10 @@
     name := allocator_name(),
     buckets := buckets(),
     counter := counters:counters_ref(),
-    index := index(),
+    last_used_index := index(),
     alloc_interval := millisecond(),
-    lasttime := millisecond(),
-    free_index := [index()]
+    last_alloc_time := millisecond(),
+    free_indices := [index()]
 }.
 
 -type buckets() :: #{bucket_name() => bucket()}.
@@ -70,7 +70,7 @@
 -type index() :: pos_integer().
 
 -define(COUNTER_SIZE, 8).
--define(NOW, erlang:system_time(millisecond)).
+-define(VIA_GPROC(Id), {via, gproc, {n, l, Id}}).
 
 -export_type([allocator_name/0, state/0, index/0]).
 
@@ -80,19 +80,19 @@
 
 -spec start_link(allocator_name()) -> _.
 start_link(Name) ->
-    gen_server:start_link({via, emqx_limiter_manager, Name}, ?MODULE, [Name], []).
+    gen_server:start_link(?VIA_GPROC(Name), ?MODULE, [Name], []).
 
 add_bucket(Name, Cfg) ->
-    add_bucket(emqx_limiter:internal_allocator(), Name, Cfg).
+    add_bucket(emqx_limiter:default_allocator(), Name, Cfg).
 
 add_bucket(AllocatorName, Name, Cfg) ->
-    gen_server:call({via, emqx_limiter_manager, AllocatorName}, {?FUNCTION_NAME, Name, Cfg}).
+    gen_server:call(?VIA_GPROC(AllocatorName), {?FUNCTION_NAME, Name, Cfg}).
 
 delete_bucket(Name) ->
-    delete_bucket(emqx_limiter:internal_allocator(), Name).
+    delete_bucket(emqx_limiter:default_allocator(), Name).
 
 delete_bucket(AllocatorName, Name) ->
-    gen_server:call({via, emqx_limiter_manager, AllocatorName}, {?FUNCTION_NAME, Name}).
+    gen_server:call(?VIA_GPROC(AllocatorName), {?FUNCTION_NAME, Name}).
 
 %%--------------------------------------------------------------------
 %%% gen_server callbacks
@@ -110,10 +110,10 @@ handle_call(
     #{
         name := AllocatorName,
         counter := Counter,
-        index := Index,
+        last_used_index := Index,
         alloc_interval := Interval,
         buckets := Buckets,
-        free_index := Free
+        free_indices := Free
     } = State
 ) ->
     case Free of
@@ -133,23 +133,23 @@ handle_call(
 
             {reply, ok, State#{
                 buckets := Buckets#{Name => Bucket},
-                index := NewIndex,
-                free_index := Free2
+                last_used_index := NewIndex,
+                free_indices := Free2
             }};
         _ ->
-            {reply, {error, <<"exceeded_max_index">>}, State}
+            {reply, {error, exceeded_max_index}, State}
     end;
 handle_call(
     {delete_bucket, Name},
     _From,
-    #{name := AllocatorName, buckets := Buckets, free_index := Free} = State
+    #{name := AllocatorName, buckets := Buckets, free_indices := Free} = State
 ) ->
     case maps:take(Name, Buckets) of
         error ->
             {reply, ok, State};
         {#{index := Index}, Buckets2} ->
-            emqx_limiter_manager:delete_bucket(AllocatorName, Name),
-            {reply, ok, State#{buckets := Buckets2, free_index := [Index | Free]}}
+            emqx_limiter_bucket_registry:delete_bucket(AllocatorName, Name),
+            {reply, ok, State#{buckets := Buckets2, free_indices := [Index | Free]}}
     end;
 handle_call(Req, _From, State) ->
     ?SLOG(error, #{msg => "emqx_limiter_allocator_unexpected_call", call => Req}),
@@ -168,7 +168,7 @@ handle_info(Info, State) ->
 terminate(_Reason, #{name := Name, buckets := Buckets} = _State) ->
     maps:foreach(
         fun(LimiterName, _) ->
-            emqx_limiter_manager:delete_bucket(Name, LimiterName)
+            emqx_limiter_bucket_registry:delete_bucket(Name, LimiterName)
         end,
         Buckets
     ),
@@ -187,10 +187,10 @@ init_state(Name) when is_binary(Name) ->
         name => Name,
         counter => Counter,
         buckets => #{},
-        index => 0,
+        last_used_index => 0,
         alloc_interval => emqx_limiter:default_alloc_interval(),
-        lasttime => ?NOW,
-        free_index => []
+        last_alloc_time => now_ms(),
+        free_indices => []
     };
 init_state(Zone) when is_atom(Zone) ->
     Cfg = emqx_config:get_zone_conf(Zone, [mqtt, limiter]),
@@ -204,10 +204,10 @@ init_state(Zone, #{alloc_interval := Interval} = Cfg) ->
         name => Zone,
         counter => Counter,
         buckets => Buckets,
-        index => maps:size(Buckets),
+        last_used_index => maps:size(Buckets),
         alloc_interval => Interval,
-        lasttime => ?NOW,
-        free_index => []
+        last_alloc_time => now_ms(),
+        free_indices => []
     }.
 
 init_buckets([Name | Names], Zone, Counter, #{alloc_interval := Interval} = Cfg, Buckets) ->
@@ -227,16 +227,16 @@ init_buckets([], _Zone, _Counter, _, Buckets) ->
 -spec do_alloc(state()) -> state().
 do_alloc(
     #{
-        lasttime := LastTime,
+        last_alloc_time := LastTime,
         buckets := Buckets
     } = State
 ) ->
     tick_alloc_event(State),
-    Now = ?NOW,
+    Now = now_ms(),
     Elapsed = Now - LastTime,
     Buckets2 = do_buckets_alloc(Buckets, Elapsed),
     State#{
-        lasttime := Now,
+        last_alloc_time := Now,
         buckets := Buckets2
     }.
 
@@ -297,7 +297,7 @@ do_create_bucket(
 
     set_tokens(Counter, Index, Capacity),
     Ref = emqx_limiter_bucket_ref:new(Counter, Index),
-    emqx_limiter_manager:insert_bucket(AllocatorName, LimiterName, Ref),
+    emqx_limiter_bucket_registry:insert_bucket(AllocatorName, LimiterName, Ref),
     #{
         name => LimiterName,
         rate => Rate,
@@ -307,3 +307,6 @@ do_create_bucket(
         index => Index,
         correction => 0
     }.
+
+now_ms() ->
+    erlang:system_time(millisecond).

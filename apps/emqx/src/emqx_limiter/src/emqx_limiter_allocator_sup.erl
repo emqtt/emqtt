@@ -19,7 +19,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, start/1, stop/1]).
+-export([start_link/0]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -28,62 +28,27 @@
 %%  API functions
 %%--------------------------------------------------------------------
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the supervisor
-%% @end
-%%--------------------------------------------------------------------
--spec start_link() ->
-    {ok, Pid :: pid()}
-    | {error, {already_started, Pid :: pid()}}
-    | {error, {shutdown, term()}}
-    | {error, term()}
-    | ignore.
+-spec start_link() -> {ok, pid()} | {error, term()}.
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
-
--spec start(emqx_limiter:zone()) -> _.
-start(Zone) ->
-    case has_limiter(Zone) of
-        true ->
-            Spec = make_child(Zone),
-            supervisor:start_child(?MODULE, Spec);
-        _ ->
-            {error, <<"No Limiter">>}
-    end.
-
-stop(Zone) ->
-    _ = supervisor:terminate_child(?MODULE, Zone),
-    supervisor:delete_child(?MODULE, Zone).
 
 %%--------------------------------------------------------------------
 %%  Supervisor callbacks
 %%--------------------------------------------------------------------
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever a supervisor is started using supervisor:start_link/[2,3],
-%% this function is called by the new process to find out about
-%% restart strategy, maximum restart intensity, and child
-%% specifications.
-%% @end
-%%--------------------------------------------------------------------
--spec init(Args :: term()) ->
-    {ok, {SupFlags :: supervisor:sup_flags(), [ChildSpec :: supervisor:child_spec()]}}
-    | ignore.
 init([]) ->
     SupFlags = #{
         strategy => one_for_one,
         intensity => 10,
         period => 3600
     },
-    {ok, {SupFlags, childs()}}.
+    {ok, {SupFlags, child_specs()}}.
 
-%%--==================================================================
+%%--------------------------------------------------------------------
 %%  Internal functions
-%%--==================================================================
-make_child(Zone) ->
+%%--------------------------------------------------------------------
+
+child_spec(Zone) ->
     #{
         id => Zone,
         start => {emqx_limiter_allocator, start_link, [Zone]},
@@ -93,18 +58,18 @@ make_child(Zone) ->
         modules => [emqx_limiter_allocator]
     }.
 
-childs() ->
+child_specs() ->
     Zones = maps:keys(emqx_config:get([zones])),
     lists:foldl(
         fun(Zone, Acc) ->
             case has_limiter(Zone) of
                 true ->
-                    [make_child(Zone) | Acc];
+                    [child_spec(Zone) | Acc];
                 _ ->
                     Acc
             end
         end,
-        [make_child(emqx_limiter:internal_allocator())],
+        [child_spec(emqx_limiter:default_allocator())],
         Zones
     ).
 

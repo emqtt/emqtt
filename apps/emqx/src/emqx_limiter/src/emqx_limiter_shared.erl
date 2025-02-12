@@ -14,6 +14,14 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
+%% @doc This module implements the shared limiter.
+%%
+%% Shared limiter is a limiter that is shared between different processes.
+%% I.e. different processes consume tokens concurrently.
+%%
+%% The shared limiter is a wrapper around a handle to a bucket managed
+%% and refilled by the `emqx_limiter_allocator`.
+
 -module(emqx_limiter_shared).
 
 -behaviour(emqx_limiter).

@@ -14,7 +14,7 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(emqx_limiter_manager).
+-module(emqx_limiter_bucket_registry).
 
 -behaviour(gen_server).
 
@@ -25,16 +25,10 @@
 -export([start_link/0]).
 
 -export([
+    find_bucket/1,
     find_bucket/2,
     insert_bucket/3,
     delete_bucket/2
-]).
-
--export([
-    register_name/2,
-    unregister_name/1,
-    whereis_name/1,
-    send/2
 ]).
 
 %% gen_server callbacks
@@ -55,7 +49,7 @@
 
 -type limiter_name() ::
     emqx_limiter:limiter_name()
-    | emqx_retainer_dispatcher.
+    | atom.
 
 -define(TAB, ?MODULE).
 
@@ -68,48 +62,23 @@
 -define(LIMITER_NAME(Zone, Name), {Zone, Name}).
 
 %%--------------------------------------------------------------------
-%%  name callback
-%%--------------------------------------------------------------------
-register_name(Name, Pid) ->
-    case whereis_name(Name) of
-        undefined ->
-            ets:insert(?TAB, #?TAB{key = Name, value = Pid}),
-            yes;
-        _ ->
-            no
-    end.
-
-unregister_name(Name) ->
-    ets:delete(?TAB, Name).
-
-whereis_name(Name) ->
-    case ets:lookup(?TAB, Name) of
-        [#?TAB{value = Pid}] ->
-            Pid;
-        _ ->
-            undefined
-    end.
-
-send(Name, Msg) ->
-    case whereis_name(Name) of
-        Pid when is_pid(Pid) ->
-            Pid ! Msg,
-            Pid;
-        undefined ->
-            exit({badarg, {Name, Msg}})
-    end.
-
-%%--------------------------------------------------------------------
 %%  API
 %%--------------------------------------------------------------------
 
+-spec find_bucket(limiter_name()) -> {ok, bucket_ref()} | undefined.
+find_bucket(Name) ->
+    find_bucket(emqx_limiter:default_allocator(), Name).
+
 -spec find_bucket(emqx_limiter_allocator:allocator_name(), limiter_name()) ->
     {ok, bucket_ref()} | undefined.
-find_bucket(Zone, Name) ->
-    case ets:lookup(?TAB, ?LIMITER_NAME(Zone, Name)) of
+find_bucket(AllocatorName, BucketName) ->
+    try ets:lookup(?TAB, ?LIMITER_NAME(AllocatorName, BucketName)) of
         [#?TAB{value = Bucket}] ->
             {ok, Bucket};
         _ ->
+            undefined
+    catch
+        error:badarg ->
             undefined
     end.
 
@@ -118,15 +87,15 @@ find_bucket(Zone, Name) ->
     limiter_name(),
     bucket_ref()
 ) -> boolean().
-insert_bucket(Zone, Name, Bucket) ->
+insert_bucket(AllocatorName, BucketName, Bucket) ->
     ets:insert(
         ?TAB,
-        #?TAB{key = ?LIMITER_NAME(Zone, Name), value = Bucket}
+        #?TAB{key = ?LIMITER_NAME(AllocatorName, BucketName), value = Bucket}
     ).
 
 -spec delete_bucket(emqx_limiter_allocator:allocator_name(), limiter_name()) -> true.
-delete_bucket(Zone, Name) ->
-    ets:delete(?TAB, ?LIMITER_NAME(Zone, Name)).
+delete_bucket(AllocatorName, BucketName) ->
+    ets:delete(?TAB, ?LIMITER_NAME(AllocatorName, BucketName)).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -134,6 +103,7 @@ start_link() ->
 %%--------------------------------------------------------------------
 %%  gen_server callbacks
 %%--------------------------------------------------------------------
+
 init([]) ->
     _ = ets:new(?TAB, [
         set,
@@ -141,8 +111,7 @@ init([]) ->
         named_table,
         {keypos, #?TAB.key},
         {write_concurrency, true},
-        {read_concurrency, true},
-        {heir, erlang:whereis(emqx_limiter_sup), none}
+        {read_concurrency, true}
     ]),
     {ok, #{}}.
 

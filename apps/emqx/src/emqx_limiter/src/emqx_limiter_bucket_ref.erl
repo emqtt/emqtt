@@ -16,9 +16,15 @@
 
 -module(emqx_limiter_bucket_ref).
 
-%% @doc limiter bucket reference
-%% this module is used to manage the bucket reference of the limiter server
-%% @end
+%% @doc Limiter bucket reference
+%%
+%% Term `bucket' referes to the Token Bucket algorithm.
+%% Limiter buckets are created/removed and refilled
+%% by the allocator server `emqx_limiter_allocator`
+%%
+%% This module exposes
+%% * a "handle" structure to reference a particular bucket
+%% * functions to consume and restore tokens from/to the bucket by this handle
 
 %% API
 -export([
@@ -34,8 +40,6 @@
     counter := counters:counters_ref(),
     index := emqx_limiter_allocator:index()
 }.
-
--elvis([{elvis_style, no_if_expression, disable}]).
 
 %%--------------------------------------------------------------------
 %%  API
@@ -56,12 +60,11 @@ check(
         index := Index
     }
 ) ->
-    RefToken = counters:get(Counter, Index),
-    if
-        RefToken >= Need ->
+    case counters:get(Counter, Index) of
+        AvailableTokens when AvailableTokens >= Need ->
             counters:sub(Counter, Index, Need),
             true;
-        true ->
+        _ ->
             false
     end.
 

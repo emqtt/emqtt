@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2021-2024 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2021-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -14,23 +14,18 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(emqx_ratelimiter_SUITE).
+-module(emqx_limiter_SUITE).
 
 -compile(export_all).
 -compile(nowarn_export_all).
-
--define(APP, emqx).
 
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("common_test/include/ct.hrl").
 
 -define(BASE_CONF, <<"">>).
 
--define(LOGT(Format, Args), ct:pal("TEST_SUITE: " ++ Format, Args)).
--define(RATE(Rate), to_rate(Rate)).
--define(NOW, erlang:system_time(millisecond)).
-
--define(ZONE, emqx_limiter:internal_allocator()).
+-define(ALLOCATOR_NAME, emqx_limiter:default_allocator()).
+-define(ZONE, ?ALLOCATOR_NAME).
 
 %%--------------------------------------------------------------------
 %% Setups
@@ -73,7 +68,7 @@ t_check(_) ->
     ?assertEqual(true, R3),
 
     emqx_limiter_allocator:add_bucket(t_check, #{rate => Rate, burst => 0}),
-    {ok, Ref} = emqx_limiter_manager:find_bucket(emqx_limiter:internal_allocator(), t_check),
+    {ok, Ref} = emqx_limiter_bucket_registry:find_bucket(t_check),
     S1 = emqx_limiter_shared:create(Ref),
     {SR1, S2} = emqx_limiter:check(1000, S1),
     {SR2, S3} = emqx_limiter:check(100, S2),
@@ -96,7 +91,7 @@ t_restore(_) ->
     ?assertEqual(true, R3),
 
     emqx_limiter_allocator:add_bucket(t_check, #{rate => 100, burst => 0}),
-    {ok, Ref} = emqx_limiter_manager:find_bucket(emqx_limiter:internal_allocator(), t_check),
+    {ok, Ref} = emqx_limiter_bucket_registry:find_bucket(t_check),
     S1 = emqx_limiter_shared:create(Ref),
     {SR1, S2} = emqx_limiter:check(1000, S1),
     S3 = emqx_limiter:restore(100, S2),

@@ -28,7 +28,7 @@
 ]).
 
 -export([
-    internal_allocator/0,
+    default_allocator/0,
     default_alloc_interval/0,
     calc_capacity/1,
     calc_capacity/2
@@ -47,6 +47,7 @@
 -type limiter_name() :: max_conn | messages | bytes.
 
 -define(DEFAULT_ALLOC_INTERVAL, 100).
+-define(DEFAULT_ALLOCATOR, <<"internal_allocator">>).
 
 %%--------------------------------------------------------------------
 %%  call backs
@@ -109,8 +110,8 @@ filter_limiter_fields(Names, Cfg) ->
     ),
     maps:with(Keys, Cfg).
 
-internal_allocator() ->
-    <<"internal_allocator">>.
+default_allocator() ->
+    ?DEFAULT_ALLOCATOR.
 
 default_alloc_interval() ->
     ?DEFAULT_ALLOC_INTERVAL.
@@ -118,6 +119,8 @@ default_alloc_interval() ->
 %% Capacity = rate * interval
 %% but if interval is less than 1 second, use 1 second instead of interval,
 %% so we can ensure that capacity is at least greater than 1
+%% TODO
+%% ceil is always greater greater or equal than 1, maybe unnecessary?
 calc_capacity(Rate) ->
     calc_capacity(Rate, default_alloc_interval()).
 

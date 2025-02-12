@@ -14,6 +14,14 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
+%% @doc This module implements the private limiter.
+%%
+%% Private limiter is a limiter that is not shared between different processes.
+%% I.e. different processes do not consume tokens concurrently.
+%%
+%% This is a more simple version of a limiter because its own toket bucket
+%% is refilled algorithmically, without the help of the external emqx_limiter_allocator.
+
 -module(emqx_limiter_private).
 
 -behaviour(emqx_limiter).

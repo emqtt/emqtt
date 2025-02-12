@@ -558,7 +558,7 @@ t_quota_bytes(_) ->
     emqx_limiter_allocator:delete_bucket(bytes),
     ?assertEqual(
         undefined,
-        emqx_limiter_manager:find_bucket(emqx_limiter:default_alloc_interval(), bytes)
+        emqx_limiter_bucket_registry:find_bucket(emqx_limiter:default_alloc_interval(), bytes)
     ),
     ok.
 
