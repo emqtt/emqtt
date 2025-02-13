@@ -27,7 +27,6 @@
     start_link/2,
     dispatch/1,
     refresh_limiter/0,
-    refresh_limiter/1,
     wait_dispatch_complete/1,
     worker/0
 ]).
@@ -41,7 +40,7 @@
     terminate/2
 ]).
 
--type limiter() :: emqx_htb_limiter:limiter().
+-type limiter() :: emqx_limiter:limiter().
 -type topic() :: emqx_types:topic().
 
 -define(POOL, ?DISPATCHER_POOL).
@@ -63,15 +62,10 @@ dispatch(Topic, Pid) ->
 
 -spec refresh_limiter() -> ok.
 refresh_limiter() ->
-    Conf = emqx:get_config([retainer]),
-    refresh_limiter(Conf).
-
--spec refresh_limiter(hocon:config()) -> ok.
-refresh_limiter(Conf) ->
     Workers = gproc_pool:active_workers(?POOL),
     lists:foreach(
         fun({_, Pid}) ->
-            gen_server:cast(Pid, {?FUNCTION_NAME, Conf})
+            gen_server:cast(Pid, ?FUNCTION_NAME)
         end,
         Workers
     ).
@@ -106,8 +100,7 @@ start_link(Pool, Id) ->
 init([Pool, Id]) ->
     erlang:process_flag(trap_exit, true),
     true = gproc_pool:connect_worker(Pool, {Pool, Id}),
-    BucketCfg = emqx:get_config([retainer, flow_control, batch_deliver_limiter], undefined),
-    {ok, Limiter} = emqx_limiter_server:connect(?DISPATCHER_LIMITER_ID, internal, BucketCfg),
+    Limiter = get_limiter(),
     {ok, #{pool => Pool, id => Id, limiter => Limiter}}.
 
 handle_call(wait_dispatch_complete, _From, State) ->
@@ -119,9 +112,8 @@ handle_call(Req, _From, State) ->
 handle_cast({dispatch, Pid, Topic}, #{limiter := Limiter} = State) ->
     {ok, Limiter2} = dispatch(Pid, Topic, Limiter),
     {noreply, State#{limiter := Limiter2}};
-handle_cast({refresh_limiter, Conf}, State) ->
-    BucketCfg = emqx_utils_maps:deep_get([flow_control, batch_deliver_limiter], Conf, undefined),
-    {ok, Limiter} = emqx_limiter_server:connect(?DISPATCHER_LIMITER_ID, internal, BucketCfg),
+handle_cast(refresh_limiter, State) ->
+    Limiter = get_limiter(),
     {noreply, State#{limiter := Limiter}};
 handle_cast(Msg, State) ->
     ?SLOG(error, #{msg => "unexpected_cast", cast => Msg}),
@@ -157,9 +149,7 @@ dispatch(Pid, Topic, Limiter) ->
 
 dispatch_at_once(Messages, Pid, Topic, Limiter0) ->
     case deliver(Messages, Pid, Topic, Limiter0) of
-        {ok, Limiter1} ->
-            {ok, Limiter1};
-        {drop, Limiter1} ->
+        {_Result, Limiter1} ->
             {ok, Limiter1};
         no_receiver ->
             ?tp(debug, retainer_dispatcher_no_receiver, #{topic => Topic}),
@@ -171,10 +161,10 @@ dispatch_with_cursor(Context, [], Cursor, _Pid, _Topic, Limiter) ->
     {ok, Limiter};
 dispatch_with_cursor(Context, Messages0, Cursor0, Pid, Topic, Limiter0) ->
     case deliver(Messages0, Pid, Topic, Limiter0) of
-        {ok, Limiter1} ->
+        {true, Limiter1} ->
             {ok, Messages1, Cursor1} = match_next(Context, Topic, Cursor0),
             dispatch_with_cursor(Context, Messages1, Cursor1, Pid, Topic, Limiter1);
-        {drop, Limiter1} ->
+        {false, Limiter1} ->
             ok = delete_cursor(Context, Cursor0),
             {ok, Limiter1};
         no_receiver ->
@@ -198,32 +188,32 @@ delete_cursor(Context, Cursor) ->
     Mod:delete_cursor(State, Cursor).
 
 -spec deliver([emqx_types:message()], pid(), topic(), limiter()) ->
-    {ok, limiter()} | {drop, limiter()} | no_receiver.
+    {boolean(), limiter()} | no_receiver.
 deliver(Messages, Pid, Topic, Limiter) ->
     case erlang:is_process_alive(Pid) of
         false ->
             no_receiver;
         _ ->
-            BatchSize = emqx_conf:get([retainer, flow_control, batch_deliver_number], undefined),
+            BatchSize = emqx_conf:get([retainer, flow_control, batch_deliver_number], 0),
             NMessages = filter_delivery(Messages, Topic),
             case BatchSize of
                 0 ->
                     deliver_to_client(NMessages, Pid, Topic),
-                    {ok, Limiter};
+                    {true, Limiter};
                 _ ->
                     deliver_in_batches(NMessages, BatchSize, Pid, Topic, Limiter)
             end
     end.
 
 deliver_in_batches([], _BatchSize, _Pid, _Topic, Limiter) ->
-    {ok, Limiter};
+    {true, Limiter};
 deliver_in_batches(Msgs, BatchSize, Pid, Topic, Limiter0) ->
     {BatchActualSize, Batch, RestMsgs} = take(BatchSize, Msgs),
-    case emqx_htb_limiter:consume(BatchActualSize, Limiter0) of
-        {ok, Limiter1} ->
+    case emqx_limiter:check(BatchActualSize, Limiter0) of
+        {true, Limiter1} ->
             ok = deliver_to_client(Batch, Pid, Topic),
             deliver_in_batches(RestMsgs, BatchSize, Pid, Topic, Limiter1);
-        {drop, _Limiter1} = Drop ->
+        {false, _Limiter1} = Drop ->
             ?SLOG(debug, #{
                 msg => "retained_message_dropped",
                 reason => "reached_ratelimit",
@@ -262,3 +252,11 @@ take(_N, [], Count, Acc) ->
     {Count, lists:reverse(Acc), []};
 take(N, [H | T], Count, Acc) ->
     take(N - 1, T, Count + 1, [H | Acc]).
+
+get_limiter() ->
+    case emqx_limiter_bucket_registry:find_bucket(?DISPATCHER_LIMITER_ID) of
+        undefined ->
+            undefined;
+        {ok, Ref} ->
+            emqx_limiter_shared:create(Ref)
+    end.

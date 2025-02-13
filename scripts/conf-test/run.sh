@@ -40,7 +40,7 @@ else
   PREFIX="e"
 fi
 
-FILES=$(ls ./scripts/conf-test/old-confs/"${PREFIX}${MAJOR_VSN}"*)
+FILES=$(find ./scripts/conf-test/old-confs/ -name "${PREFIX}${MAJOR_VSN}*")
 
 cp "$EMQX_ROOT"/etc/emqx.conf "$EMQX_ROOT"/etc/emqx.conf.bak
 cleanup() {

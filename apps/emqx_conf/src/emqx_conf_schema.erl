@@ -71,7 +71,6 @@
     emqx_rule_engine_schema,
     emqx_exhook_schema,
     emqx_psk_schema,
-    emqx_limiter_schema,
     emqx_slow_subs_schema,
     {emqx_otel_schema, ee},
     emqx_mgmt_api_key_schema

@@ -67,7 +67,7 @@
     %% The {active, N} option
     active_n :: pos_integer(),
     %% Limiter
-    limiter :: option(emqx_htb_limiter:limiter()),
+    limiter :: option(emqx_limiter:limiter()),
     %% Limit Timer
     limit_timer :: option(reference()),
     %% Parse State

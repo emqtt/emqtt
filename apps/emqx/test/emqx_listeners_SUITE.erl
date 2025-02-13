@@ -131,8 +131,7 @@ t_max_conns_tcp(_Config) ->
     Port = emqx_common_test_helpers:select_free_port(tcp),
     Conf = #{
         <<"bind">> => format_bind({"127.0.0.1", Port}),
-        <<"max_connections">> => 4321,
-        <<"limiter">> => #{}
+        <<"max_connections">> => 4321
     },
     with_listener(tcp, maxconns, Conf, fun() ->
         ?assertEqual(
@@ -145,7 +144,6 @@ t_client_attr_as_mountpoint(_Config) ->
     Port = emqx_common_test_helpers:select_free_port(tcp),
     ListenerConf = #{
         <<"bind">> => format_bind({"127.0.0.1", Port}),
-        <<"limiter">> => #{},
         <<"mountpoint">> => <<"groups/${client_attrs.ns}/">>
     },
     {ok, Compiled} = emqx_variform:compile("nth(1,tokens(clientid,'-'))"),
@@ -176,8 +174,7 @@ t_current_conns_tcp(_Config) ->
     Port = emqx_common_test_helpers:select_free_port(tcp),
     Conf = #{
         <<"bind">> => format_bind({"127.0.0.1", Port}),
-        <<"max_connections">> => 42,
-        <<"limiter">> => #{}
+        <<"max_connections">> => 42
     },
     with_listener(tcp, curconns, Conf, fun() ->
         ?assertEqual(
@@ -190,7 +187,6 @@ t_tcp_frame_parsing_conn(_Config) ->
     Port = emqx_common_test_helpers:select_free_port(tcp),
     Conf = #{
         <<"bind">> => format_bind({"127.0.0.1", Port}),
-        <<"limiter">> => #{},
         <<"parse_unit">> => <<"frame">>
     },
     with_listener(tcp, ?FUNCTION_NAME, Conf, fun() ->
@@ -209,7 +205,6 @@ t_ssl_frame_parsing_conn(Config) ->
     Port = emqx_common_test_helpers:select_free_port(ssl),
     Conf = #{
         <<"bind">> => format_bind({"127.0.0.1", Port}),
-        <<"limiter">> => #{},
         <<"ssl_options">> => #{
             <<"cacertfile">> => filename:join(PrivDir, "ca.pem"),
             <<"certfile">> => filename:join(PrivDir, "server.pem"),
@@ -233,7 +228,6 @@ t_wss_conn(Config) ->
     Port = emqx_common_test_helpers:select_free_port(ssl),
     Conf = #{
         <<"bind">> => format_bind({"127.0.0.1", Port}),
-        <<"limiter">> => #{},
         <<"ssl_options">> => #{
             <<"cacertfile">> => filename:join(PrivDir, "ca.pem"),
             <<"certfile">> => filename:join(PrivDir, "server.pem"),

@@ -256,7 +256,6 @@ start_apps(Apps, SpecAppConfig, Opts) when is_function(SpecAppConfig) ->
     %% Because, minirest, ekka etc.. application will scan these modules
     lists:foreach(fun load/1, [emqx | Apps]),
     ok = start_ekka(),
-    ok = emqx_ratelimiter_SUITE:load_conf(),
     lists:foreach(fun(App) -> start_app(App, SpecAppConfig, Opts) end, [emqx | Apps]).
 
 load(App) ->
@@ -680,7 +679,6 @@ ensure_quic_listener(Name, UdpPort, ExtraSettings) ->
             keyfile => filename:join(code:lib_dir(emqx), "etc/certs/key.pem"),
             hibernate_after => 30000
         },
-        limiter => #{},
         max_connections => 1024000,
         mountpoint => <<>>,
         zone => default
