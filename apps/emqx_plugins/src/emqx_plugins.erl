@@ -734,6 +734,7 @@ do_ensure_started(NameVsn) ->
         fun() ->
             case ensure_exists_and_installed(NameVsn) of
                 ok ->
+                    _ = maybe_load_config_schema(NameVsn, ?normal),
                     Plugin = do_read_plugin(NameVsn),
                     ok = load_code_start_apps(NameVsn, Plugin);
                 {error, #{reason := Reason} = ReasonMap} ->
