@@ -56,7 +56,8 @@ podManagementPolicy: Parallel
 
 persistence:
   enabled: false
-  size: 20Mi
+  # Increased size after 5.8.0 version
+  size: 2Gi
   storageClassName: ""
   accessMode: ReadWriteOnce
   ## Existing PersistentVolumeClaims
@@ -128,6 +129,10 @@ emqxConfig:
   EMQX_CLUSTER__DISCOVERY_STRATEGY: "dns"
   EMQX_DASHBOARD__DEFAULT_USERNAME: "admin"
   EMQX_DASHBOARD__DEFAULT_PASSWORD: "public"
+  # Extra environment variables if persistent storage is enabled
+  # EMQX_DURABLE_STORAGE_MESSAGES_N_SHARDS: '2'
+  # EMQX_DURABLE_STORAGE_QUEUES_N_SHARDS: '2'
+  
 
 ## EMQX Enterprise Edition requires manual creation of a Secret containing the licensed content. Write the name of Secret to the value of "emqxLicenseSecretName"
 ## Example:
