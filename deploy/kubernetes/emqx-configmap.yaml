@@ -1,0 +1,95 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: emqx-config
+  namespace: default
+data:
+  acl.conf: |-
+    {allow, {username, "^dashboard?"}, subscribe, ["$SYS/#"]}.
+    {allow, {ipaddr, "127.0.0.1"}, all, ["$SYS/#", "#"]}.
+    {allow, all, subscribe, ["$SYS/brokers/+/clients/#"]}.
+    {deny,  all, subscribe, ["$SYS/#", {eq, "#"}]}.
+    {allow, all}.
+
+  emqx_auth_mnesia.conf: |-
+    auth.mnesia.password_hash = sha256
+    auth.user.1.username = emqx
+    auth.user.1.password = 5fH8YcJOxpG5
+
+  emqx.conf: |-
+    node {
+      cookie = "4BP2iAiG3Hyor5kDbkkiRK7I2mnxY"
+      data_dir = "data"
+    }
+
+    cluster {
+      discovery_strategy = k8s
+      k8s {
+        service_name = emqx
+        address_type = ip
+        apiserver = "https://kubernetes.default.svc:443"
+      }
+    }
+
+    log {
+      console_handler {
+        enable = true
+        level = warning
+      }
+    }
+
+    listeners.tcp.default {
+      bind = "0.0.0.0:1883"
+      max_connections = 1024000
+    }
+
+    listeners.ssl.default {
+      bind = "0.0.0.0:8883"
+      max_connections = 512000
+      ssl_options {
+        keyfile = "etc/certs/key.pem"
+        certfile = "etc/certs/cert.pem"
+        cacertfile = "etc/certs/cacert.pem"
+      }
+    }
+
+    listeners.ws.default {
+      bind = "0.0.0.0:8083"
+      max_connections = 1024000
+      websocket.mqtt_path = "/mqtt"
+    }
+
+    listeners.wss.default {
+      bind = "0.0.0.0:8084"
+      max_connections = 512000
+      websocket.mqtt_path = "/mqtt"
+      ssl_options {
+        keyfile = "etc/certs/key.pem"
+        certfile = "etc/certs/cert.pem"
+        cacertfile = "etc/certs/cacert.pem"
+      }
+    }
+
+    dashboard {
+        listeners.http {
+            bind = 18083
+        }
+        default_username = "admin"
+        default_password = "pTgnd3Kl9qjj"
+    }
+
+    authorization {
+      deny_action = ignore
+      no_match = allow
+      cache = { enable = true }
+      sources =  [
+        {
+          type = file
+          enable = true
+          # This file is immutable to EMQX.
+          # Once new rules are created from dashboard UI or HTTP API,
+          # the file 'data/authz/acl.conf' is used instead of this one
+          path = "etc/acl.conf"
+        }
+      ]
+    }

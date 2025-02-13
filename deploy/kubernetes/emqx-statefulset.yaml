@@ -1,0 +1,132 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: emqx
+  namespace: default
+spec:
+  serviceName: emqx
+  replicas: 3
+  selector:
+    matchLabels:
+      app: emqx
+  template:
+    metadata:
+      labels:
+        app: emqx
+    spec:
+      serviceAccountName: emqx
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - emqx
+            topologyKey: kubernetes.io/hostname
+      initContainers:
+      - name: init-data
+        image: alpine:3.17
+        command:
+        - /bin/sh
+        - -c
+        - chown -v 1000. /data/.
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      containers:
+      - name: emqx
+        imagePullPolicy: Always
+        image: emqx/emqx:5.0.21
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh","-c","emqx ctl cluster leave"]
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 300m
+          limits:
+            memory: 2Gi
+            cpu: 500m
+        ports:
+        - containerPort: 1883
+          name: mqtt
+        - containerPort: 8083
+          name: ws
+        - containerPort: 8084
+          name: wss
+        - containerPort: 8883
+          name: mqtt-ssl
+        - containerPort: 18083
+          name: dashboard
+        env:
+        - name: TZ
+          value: Asia/Shanghai
+        - name: EMQX_LOADED_PLUGINS
+          value: emqx_auth_mnesia
+        - name: EMQX_ZONE__INTERNAL__ALLOW_ANONYMOUS
+          value: "false"
+        - name: EMQX_ALLOW_ANONYMOUS
+          value: "false"
+        - name: EMQX_CLUSTER__K8S__NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        livenessProbe:
+          httpGet:
+            scheme: HTTP
+            path: /status
+            port: 18083
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            scheme: HTTP
+            path: /status
+            port: 18083
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /opt/emqx/data
+        - name: config
+          mountPath: /etc/emqx/etc/acl.conf
+          subPath: acl.conf
+        - name: config
+          mountPath: /opt/emqx/etc/emqx.conf
+          subPath: emqx.conf
+        - name: config
+          mountPath: /opt/emqx/etc/plugins/emqx_auth_mnesia.conf
+          subPath: emqx_auth_mnesia.conf
+      volumes:
+      - name: config
+        configMap:
+          defaultMode: 0644
+          name: emqx-config
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: data
+      resources:
+        requests:
+          storage: 20Gi

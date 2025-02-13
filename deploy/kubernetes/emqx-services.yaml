@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: emqx
+  namespace: default
+  labels:
+    app: emqx
+spec:
+  ports:
+  - port: 1883
+    name: mqtt
+  - port: 8081
+    name: mgmt
+  - port: 8083
+    name: ws
+  - port: 8084
+    name: wss
+  - port: 8883
+    name: mqtt-ssl
+  - port: 18083
+    name: dashboard
+  clusterIP: None
+  selector:
+    app: emqx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: emqx-http
+  namespace: default
+  labels:
+    app: emqx
+spec:
+  ports:
+    - port: 1883
+      name: mqtt
+      targetPort: 1883
+    - port: 18083
+      name: http-ui
+      targetPort: 18083
+  selector:
+    app: emqx
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
