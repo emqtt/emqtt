@@ -45,8 +45,8 @@
 
 -spec create_by_names(
     [emqx_limiter:limiter_name()],
-    emqx_limiter:zone(),
-    container()
+    _Config :: emqx_maybe:t(map()),
+    emqx_limiter:zone()
 ) -> container().
 create_by_names(Names, undefined, Zone) ->
     create_by_names(Names, #{}, Zone);

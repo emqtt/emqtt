@@ -49,7 +49,7 @@
 
 -type limiter_name() ::
     emqx_limiter:limiter_name()
-    | atom.
+    | atom().
 
 -define(TAB, ?MODULE).
 
