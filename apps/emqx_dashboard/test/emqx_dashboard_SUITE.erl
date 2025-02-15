@@ -79,6 +79,23 @@ end_per_suite(Config) ->
     emqx_common_test_http:delete_default_app(),
     emqx_cth_suite:stop(?config(suite_apps, Config)).
 
+stop_dashboard() ->
+    application:stop(emqx_dashboard),
+    clear_swagger_spec().
+
+clear_swagger_spec() ->
+    %% Perf hack: when restarting `emqx_dashboard' and regenerating dispatch, one source
+    %% of slowness is currently in `cowboy_swagger': loading the existing spec,
+    %% normalizing it to a JSON term (it's already normalized), then adding the
+    %% definitions (already JSON terms, but get normalized) _twice_, merging it with
+    %% existing spec, then storing it back to application env, not before normalizing the
+    %% result yet again.
+    %% By clearing this env parameter, we save some time in the tests.
+    application:unset_env(cowboy_swagger, global_spec).
+
+start_dashboard() ->
+    application:start(emqx_dashboard).
+
 t_overview(_) ->
     mnesia:clear_table(?ADMIN),
     emqx_dashboard_admin:add_user(
@@ -109,8 +126,8 @@ t_dashboard_restart(Config) ->
                     }
             }
     }),
-    application:stop(emqx_dashboard),
-    application:start(emqx_dashboard),
+    stop_dashboard(),
+    start_dashboard(),
     Name = 'http:dashboard',
     t_overview(Config),
     [{'_', [], Rules}] = Dispatch = persistent_term:get(Name),
@@ -125,9 +142,9 @@ t_dashboard_restart(Config) ->
     ?check_trace(
         ?wait_async_action(
             begin
-                ok = application:stop(emqx_dashboard),
+                stop_dashboard(),
                 ?assertEqual(Dispatch, persistent_term:get(Name)),
-                ok = application:start(emqx_dashboard),
+                start_dashboard(),
                 %% After we restart the dashboard, the dispatch rules should be the same.
                 CheckRules(step_1)
             end,
@@ -146,8 +163,8 @@ t_dashboard_restart(Config) ->
             begin
                 %% erase to mock the initial dashboard startup.
                 persistent_term:erase(Name),
-                ok = application:stop(emqx_dashboard),
-                ok = application:start(emqx_dashboard),
+                stop_dashboard(),
+                start_dashboard(),
                 ct:sleep(800),
                 %% regenerate the dispatch rules again
                 CheckRules(step_3)
@@ -277,6 +294,7 @@ t_disable_swagger_json(_Config) ->
     ?check_trace(
         ?wait_async_action(
             begin
+                clear_swagger_spec(),
                 DashboardCfg2 = DashboardCfg#{<<"swagger_support">> => false},
                 emqx:update_config([dashboard], DashboardCfg2)
             end,
@@ -294,6 +312,7 @@ t_disable_swagger_json(_Config) ->
     ?check_trace(
         ?wait_async_action(
             begin
+                clear_swagger_spec(),
                 DashboardCfg3 = DashboardCfg#{<<"swagger_support">> => true},
                 emqx:update_config([dashboard], DashboardCfg3)
             end,

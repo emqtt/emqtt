@@ -103,7 +103,7 @@ t_update_conf(_Config) ->
         begin
             ?assertMatch({ok, _}, emqx:update_config([<<"dashboard">>], Raw)),
             ?assertEqual(Raw, emqx:get_raw_config([<<"dashboard">>])),
-            {ok, _} = ?block_until(#{?snk_kind := regenerate_minirest_dispatch}, 10000),
+            {ok, _} = ?block_until(#{?snk_kind := regenerate_minirest_dispatch}, 30000),
             ok
         end,
         fun(ok, Trace) ->

@@ -45,7 +45,7 @@ t_change_i18n_lang(_Config) ->
     ?check_trace(
         begin
             ok = change_i18n_lang(zh),
-            {ok, _} = ?block_until(#{?snk_kind := regenerate_minirest_dispatch}, 10_000),
+            {ok, _} = ?block_until(#{?snk_kind := regenerate_minirest_dispatch}, 30_000),
             ok
         end,
         fun(ok, Trace) ->
