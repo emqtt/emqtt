@@ -2,7 +2,7 @@
 {application, emqx_ds_builtin_raft, [
     {description, "Raft replication layer for the durable storage"},
     % strict semver, bump manually!
-    {vsn, "0.2.2"},
+    {vsn, "0.2.3"},
     {modules, []},
     {registered, []},
     {applications, [kernel, stdlib, gproc, mria, ra, emqx_durable_storage]},

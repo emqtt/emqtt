@@ -690,6 +690,88 @@ t_rebalance_offline_restarts(Config) ->
     ?retry(1000, 20, ?assertEqual([], emqx_ds_test_helpers:transitions(N1, ?DB))),
     ?assertEqual(lists:sort([S1, S2]), ds_repl_meta(N1, db_sites, [?DB])).
 
+t_rebalance_tolerate_lost(init, Config) ->
+    Apps = [appspec(emqx_durable_storage), appspec(emqx_ds_builtin_raft)],
+    Specs = emqx_cth_cluster:mk_nodespecs(
+        [
+            {t_rebalance_tolerate_lost1, #{apps => Apps}},
+            {t_rebalance_tolerate_lost2, #{apps => Apps}},
+            {t_rebalance_tolerate_lost3, #{apps => Apps}}
+        ],
+        #{work_dir => ?config(work_dir, Config)}
+    ),
+    ok = snabbkaffe:start_trace(),
+    [{nodespecs, Specs} | Config];
+t_rebalance_tolerate_lost('end', _Config) ->
+    ok = snabbkaffe:stop().
+
+t_rebalance_tolerate_lost(Config) ->
+    %% This testcase verifies that rebalancing can conclude if there are shards
+    %% with replicas residing exclusively on nodes that left the cluster (w/o
+    %% handing the data off first).
+
+    [NS1, NS2, NS3] = ?config(nodespecs, Config),
+    MsgStream = emqx_ds_test_helpers:topic_messages(?FUNCTION_NAME, <<"C1">>),
+
+    %% Start and initialize DB on a first node.
+    %% The same usually happens with current defaults.
+    [N1] = emqx_cth_cluster:start([NS1]),
+    Opts = opts(Config, #{n_shards => 4, n_sites => 1, replication_factor => 3}),
+    assert_db_open([N1], ?DB, Opts),
+
+    %% Start and initialize DB on rest of the nodes.
+    [N2, N3] = emqx_cth_cluster:start([NS2, NS3]),
+    assert_db_open([N2, N3], ?DB, Opts),
+
+    %% Find out which sites are there.
+    Nodes = [N1, N2, N3],
+    Sites = [S1, S2, S3] = [ds_repl_meta(N, this_site) || N <- Nodes],
+    ct:pal("Sites: ~p", [Sites]),
+
+    ct:pal("DS Status [healthy cluster]:", []),
+    ?ON(N2, emqx_ds_replication_layer_meta:print_status()),
+
+    %% Shut down N1 and then make it leave the cluster.
+    %% This will lead to a situation when DB is residing on out-of-cluster nodes only.
+    ok = emqx_cth_cluster:stop_node(N1),
+    _ = ?retry(200, 5, [N2, N3] = ?ON(N2, mria:cluster_nodes(running))),
+    ok = ?ON(N2, ekka:force_leave(N1)),
+    ok = timer:sleep(1_000),
+
+    ct:pal("DS Status [lost node holding the data]:", []),
+    ?ON(N2, emqx_ds_replication_layer_meta:print_status()),
+
+    %% Attempt to forget S1 should fail.
+    ?assertEqual(
+        {error, {member_of_replica_sets, [?DB]}},
+        ?ON(N2, emqx_ds_replication_layer_meta:forget_site(S1))
+    ),
+
+    %% Now turn S2 and S3 into members of DB replica set, excluding S1 in effect.
+    {ok, _} = ds_repl_meta(N2, assign_db_sites, [?DB, [S2, S3]]),
+    ct:pal("DS Status [rebalancing planned]:", []),
+    ?ON(N2, emqx_ds_replication_layer_meta:print_status()),
+
+    %% Target state should still be reached eventually.
+    ?retry(1000, 20, ?assertEqual([], emqx_ds_test_helpers:transitions(N2, ?DB))),
+    ?assertEqual(lists:sort([S2, S3]), ds_repl_meta(N2, db_sites, [?DB])),
+
+    ct:pal("DS Status [rebalancing concluded]:", []),
+    ?ON(N2, emqx_ds_replication_layer_meta:print_status()),
+
+    %% Messages can now again be persisted successfully.
+    {Msgs1, MsgStream1} = emqx_utils_stream:consume(50, MsgStream),
+    {Msgs2, _MsgStream} = emqx_utils_stream:consume(50, MsgStream1),
+    ?assertEqual(ok, ?ON(N2, emqx_ds:store_batch(?DB, Msgs1))),
+    ?assertEqual(ok, ?ON(N3, emqx_ds:store_batch(?DB, Msgs2))),
+    MsgsPersisted = ?ON(N2, emqx_ds_test_helpers:consume(?DB, ['#'])),
+    ok = emqx_ds_test_helpers:diff_messages(Msgs1 ++ Msgs2, MsgsPersisted),
+
+    %% Attempt to forget S1 should now succeed.
+    ?assertEqual(ok, ?ON(N2, emqx_ds_replication_layer_meta:forget_site(S1))),
+
+    ok = emqx_cth_cluster:stop(Nodes).
+
 t_drop_generation(Config) ->
     Apps = [appspec(emqx_durable_storage), emqx_ds_builtin_raft],
     [_, _, NS3] =

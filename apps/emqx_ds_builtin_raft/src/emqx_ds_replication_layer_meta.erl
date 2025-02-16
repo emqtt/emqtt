@@ -127,7 +127,6 @@
     %% Sites that should contain the data when the cluster is in the
     %% stable state (no nodes are being added or removed from it):
     target_set :: [site()] | undefined,
-    % target_set :: [transition() | site()] | undefined,
     misc = #{} :: map()
 }).
 
@@ -176,96 +175,14 @@
     erlang:make_tuple(record_info(size, ?SHARD_TAB), '_', [{#?SHARD_TAB.shard, SHARD}])
 ).
 
+-define(TRANSITION_PAT(SHARD),
+    %% Equivalent of `#?TRANSITION_TAB{shard = SHARD, _ = '_'}`
+    erlang:make_tuple(record_info(size, ?TRANSITION_TAB), '_', [{#?TRANSITION_TAB.shard, SHARD}])
+).
+
 %%================================================================================
 %% API functions
 %%================================================================================
-
--spec print_status() -> ok.
-print_status() ->
-    io:format("THIS SITE:~n"),
-    try this_site() of
-        Site -> io:format("~s~n", [Site])
-    catch
-        error:badarg ->
-            io:format(
-                "(!) UNCLAIMED~n"
-                "(!) Likely this node's name is already known as another site in the cluster.~n"
-                "(!) Please resolve conflicts manually.~n"
-            )
-    end,
-    io:format("~nSITES:~n", []),
-    lists:foreach(
-        fun(#?NODE_TAB{site = Site, node = Node}) ->
-            Status =
-                case mria:cluster_status(Node) of
-                    running -> "    up";
-                    stopped -> "(x) down";
-                    false -> "(!) UNIDENTIFIED"
-                end,
-            io:format("~s    ~p    ~s~n", [Site, Node, Status])
-        end,
-        eval_qlc(mnesia:table(?NODE_TAB))
-    ),
-    Shards = eval_qlc(mnesia:table(?SHARD_TAB)),
-    Transitions = eval_qlc(mnesia:table(?TRANSITION_TAB)),
-    io:format(
-        "~nSHARDS:~n~s~s~n",
-        [string:pad("Shard", 30), "Replicas"]
-    ),
-    lists:foreach(
-        fun(#?SHARD_TAB{shard = DBShard, replica_set = RS}) ->
-            ShardStr = format_shard(DBShard),
-            ReplicasStr = string:join([format_replica(R) || R <- RS], "  "),
-            io:format(
-                "~s~s~n",
-                [string:pad(ShardStr, 30), ReplicasStr]
-            )
-        end,
-        Shards
-    ),
-    PendingTransitions = lists:filtermap(
-        fun(Record = #?SHARD_TAB{shard = DBShard}) ->
-            ClaimedTs = [T || T = #?TRANSITION_TAB{shard = S} <- Transitions, S == DBShard],
-            case compute_transitions(Record, ClaimedTs) of
-                [] -> false;
-                ShardTransitions -> {true, {DBShard, ShardTransitions}}
-            end
-        end,
-        Shards
-    ),
-    PendingTransitions /= [] andalso
-        io:format(
-            "~nREPLICA TRANSITIONS:~n~s~s~n",
-            [string:pad("Shard", 30), "Transitions"]
-        ),
-    lists:foreach(
-        fun({DBShard, ShardTransitions}) ->
-            ShardStr = format_shard(DBShard),
-            TransStr = string:join(lists:map(fun format_transition/1, ShardTransitions), "  "),
-            io:format(
-                "~s~s~n",
-                [string:pad(ShardStr, 30), TransStr]
-            )
-        end,
-        PendingTransitions
-    ).
-
-format_shard({DB, Shard}) ->
-    io_lib:format("~p/~s", [DB, Shard]).
-
-format_replica(Site) ->
-    Marker =
-        case mria:cluster_status(?MODULE:node(Site)) of
-            running -> "   ";
-            stopped -> "(x)";
-            false -> "(!)"
-        end,
-    io_lib:format("~s ~s", [Marker, Site]).
-
-format_transition({add, Site}) ->
-    io_lib:format("+~s", [Site]);
-format_transition({del, Site}) ->
-    io_lib:format("-~s", [Site]).
 
 -spec this_site() -> site().
 this_site() ->
@@ -327,7 +244,7 @@ allocate_shards(DB) ->
 
 -spec sites() -> [site()].
 sites() ->
-    eval_qlc(qlc:q([Site || #?NODE_TAB{site = Site} <- mnesia:table(?NODE_TAB)])).
+    [R#?NODE_TAB.site || R <- mnesia:dirty_match_object(?NODE_TAB, ?NODE_PAT())].
 
 -spec node(site()) -> node() | undefined.
 node(Site) ->
@@ -338,14 +255,147 @@ node(Site) ->
             undefined
     end.
 
--spec forget_site(site()) -> ok | {error, _}.
+-spec forget_site(site()) -> ok | {error, _Reason}.
 forget_site(Site) ->
-    case mnesia:dirty_read(?NODE_TAB, Site) of
+    maybe
+        [Record] ?= mnesia:dirty_read(?NODE_TAB, Site),
+        false ?= node_status(Record#?NODE_TAB.node),
+        %% Node is lost, proceed.
+        transaction(fun ?MODULE:forget_site_trans/1, [Record])
+    else
         [] ->
             {error, nonexistent_site};
-        [Record] ->
-            transaction(fun ?MODULE:forget_site_trans/1, [Record])
+        running ->
+            {error, site_online};
+        stopped ->
+            %% Node is stopped, reject the request.
+            %% If it's gone, it should leave the cluster first.
+            {error, site_temporarily_offline}
     end.
+
+%%===============================================================================
+
+-spec print_status() -> ok.
+print_status() ->
+    %% TODO: Consistent view of state.
+    Nodes = all_nodes(),
+    Shards = all_shards(),
+    Transitions = all_transitions(),
+    print_status(Nodes, Shards, Transitions).
+
+print_status(Nodes, Shards, Transitions) ->
+    PendingTransitions = lists:filtermap(
+        fun(Record = #?SHARD_TAB{shard = DBShard}) ->
+            ClaimedTs = [T || T = #?TRANSITION_TAB{shard = S} <- Transitions, S == DBShard],
+            case compute_transitions(Record, ClaimedTs) of
+                [] -> false;
+                ShardTransitions -> {true, {DBShard, ShardTransitions}}
+            end
+        end,
+        Shards
+    ),
+    %% This site
+    io:format("THIS SITE:~n"),
+    try this_site() of
+        Site -> io:format("~s~n", [Site])
+    catch
+        error:badarg ->
+            io:format(
+                "(!) UNCLAIMED~n"
+                "(!) Likely this node's name is already known as another site in the cluster.~n"
+                "(!) Please resolve conflicts manually.~n"
+            )
+    end,
+    %% Sites information
+    io:format("~nSITES:~n", []),
+    print_table(
+        ["Site", "Node", "Status"],
+        [
+            [Site, Node, format_node_status(node_status(Node))]
+         || #?NODE_TAB{site = Site, node = Node} <- Nodes
+        ]
+    ),
+    NodesLost = [Node || #?NODE_TAB{node = Node} <- Nodes, node_status(Node) == false],
+    NodesLost =/= [] andalso
+        io:format(
+            "(!) ATTENTION~n"
+            "(!) One or more sites are lost, replicas under their ownership are gone.~n"
+            "(!) Availability may be compromised.~n"
+            "(!) Please take actions to bring the cluster back to healthy state.~n"
+        ),
+    %% Shards information
+    io:format("~nSHARDS:~n"),
+    print_table(
+        ["DB/Shard", "Replicas", "Transitions"],
+        [
+            [
+                format_shard(DBShard),
+                {group, [
+                    {subcolumns, [
+                        format_replicas(RS, Nodes), format_transitions(ShardTransitions)
+                    ]}
+                ]}
+            ]
+         || #?SHARD_TAB{shard = DBShard, replica_set = RS} <- Shards,
+            ShardTransitions <- [proplists:get_value(DBShard, PendingTransitions, [])]
+        ]
+    ),
+    TransitionsStuck = [
+        DBShard
+     || #?SHARD_TAB{shard = DBShard, replica_set = RS} <- Shards,
+        RSLost <- [[Site || Site <- RS, site_status(Site, Nodes) == false]],
+        length(RSLost) * 2 >= length(RS)
+    ],
+    TransitionsStuck =/= [] andalso
+        io:format(
+            "(!) ATTENTION~n"
+            "(!) One or more shards have replica set where majority of replicas are gone.~n"
+            "(!) Membership changes are compromised, pending transitions may never finish.~n"
+            "(!) Please take necessary steps to deal with lost sites.~n"
+            "(!) Prepare for the possibility of data loss.~n"
+        ),
+    ok.
+
+format_shard({DB, Shard}) ->
+    io_lib:format("~p/~s", [DB, Shard]).
+
+format_replicas(RS, Nodes) ->
+    [format_replica(R, Nodes) || R <- RS].
+
+format_replica(Site, Nodes) ->
+    [Site, format_node_marker(site_status(Site, Nodes))].
+
+site_status(Site, Nodes) ->
+    [Node] = [N || #?NODE_TAB{site = S, node = N} <- Nodes, S == Site],
+    node_status(Node).
+
+format_transitions(Transitions) ->
+    [format_transition(T) || T <- Transitions].
+
+format_transition({add, Site}) ->
+    ["+ ", Site];
+format_transition({del, Site}) ->
+    ["- ", Site].
+
+format_node_status(Status) ->
+    case Status of
+        running -> "    up";
+        stopped -> "(x) down";
+        false -> "(!) LOST"
+    end.
+
+format_node_marker(Status) ->
+    case Status of
+        running -> "";
+        stopped -> " (x)";
+        false -> " (!)"
+    end.
+
+node_status(Node) ->
+    mria:cluster_status(Node).
+
+print_table(Header, Rows) ->
+    io:put_chars(emqx_utils_fmt:table(Header, Rows)).
 
 %%===============================================================================
 %% DB API
@@ -608,7 +658,7 @@ claim_transition_trans(DB, Shard, Trans) ->
             [] ->
                 mnesia:abort({nonexistent_shard, {DB, Shard}})
         end,
-    case mnesia:read(?TRANSITION_TAB, {DB, Shard}, write) of
+    case shard_transition_trans(ShardRecord) of
         [#?TRANSITION_TAB{transition = Trans}] ->
             ok;
         [#?TRANSITION_TAB{transition = Conflict}] ->
@@ -673,6 +723,9 @@ db_config_trans(DB, LockType) ->
 db_shards_trans(DB) ->
     mnesia:match_object(?SHARD_TAB, ?SHARD_PAT({DB, '_'}), write).
 
+shard_transition_trans(#?SHARD_TAB{shard = DBShard}) ->
+    mnesia:read(?TRANSITION_TAB, DBShard, write).
+
 -spec drop_db_trans(emqx_ds:db()) -> ok.
 drop_db_trans(DB) ->
     mnesia:delete({?META_TAB, DB}),
@@ -693,17 +746,44 @@ claim_site_trans(Site, Node) ->
 
 -spec forget_site_trans(_Record :: tuple()) -> ok.
 forget_site_trans(Record = #?NODE_TAB{site = Site}) ->
+    %% Safeguards.
     DBs = mnesia:all_keys(?META_TAB),
-    SiteDBs = [DB || DB <- DBs, S <- list_db_target_sites(db_shards_trans(DB)), S == Site],
+    %% 1. Compute which DBs has this site as a replica for any of the shards.
+    SiteDBs = lists:usort([DB || DB <- DBs, S <- list_db_sites(db_shards_trans(DB)), S == Site]),
+    %% 2. Compute which DBs has this site in a membership transition, for any of the shards.
+    SiteTargetDBs = lists:usort([
+        DB
+     || DB <- DBs,
+        ShardRecord <- db_shards_trans(DB),
+        {_, S} <- compute_transitions(ShardRecord, shard_transition_trans(ShardRecord)),
+        S == Site
+    ]),
     case SiteDBs of
-        [] ->
-            mnesia:delete_object(?NODE_TAB, Record, write);
+        [] when SiteTargetDBs == [] ->
+            Safeguard = ok;
         [_ | _] ->
-            mnesia:abort({member_of_replica_sets, SiteDBs})
+            Safeguard = {member_of_replica_sets, SiteDBs};
+        [] ->
+            Safeguard = {member_of_target_sets, SiteTargetDBs}
+    end,
+    case Safeguard of
+        ok ->
+            mnesia:delete_object(?NODE_TAB, Record, write);
+        _Otherwise ->
+            mnesia:abort(Safeguard)
     end.
 
 node_sites(Node) ->
     mnesia:dirty_match_object(?NODE_TAB, ?NODE_PAT(Node)).
+
+all_nodes() ->
+    mnesia:dirty_match_object(?NODE_TAB, ?NODE_PAT()).
+
+all_shards() ->
+    mnesia:dirty_match_object(?SHARD_TAB, ?SHARD_PAT('_')).
+
+all_transitions() ->
+    mnesia:dirty_match_object(?TRANSITION_TAB, ?TRANSITION_PAT('_')).
 
 %%================================================================================
 %% Internal functions
@@ -864,15 +944,6 @@ apply_transition({del, S}, Sites) ->
 
 gen_shards(NShards) ->
     [integer_to_binary(I) || I <- lists:seq(0, NShards - 1)].
-
-eval_qlc(Q) ->
-    case mnesia:is_transaction() of
-        true ->
-            qlc:eval(Q);
-        false ->
-            {atomic, Result} = mria:ro_transaction(?RLOG_SHARD, fun() -> qlc:eval(Q) end),
-            Result
-    end.
 
 transaction(Fun, Args) ->
     case mria:transaction(?RLOG_SHARD, Fun, Args) of

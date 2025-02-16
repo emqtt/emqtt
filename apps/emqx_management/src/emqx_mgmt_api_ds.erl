@@ -386,8 +386,11 @@ db_replica(delete, #{bindings := #{ds := DB, site := Site}}) ->
 -spec update_db_sites(emqx_ds:db(), [emqx_ds_replication_layer_meta:site()], rest | cli) ->
     {ok, [emqx_ds_replication_layer_meta:site()]} | {error, _}.
 update_db_sites(DB, Sites, Via) when is_list(Sites) ->
-    ?SLOG(warning, #{
-        msg => "durable_storage_rebalance_request", ds => DB, sites => Sites, via => Via
+    ?SLOG(notice, #{
+        msg => "durable_storage_rebalance_request",
+        ds => DB,
+        sites => Sites,
+        via => Via
     }),
     meta_result_to_binary(emqx_ds_replication_layer_meta:assign_db_sites(DB, Sites));
 update_db_sites(_, _, _) ->
@@ -396,16 +399,22 @@ update_db_sites(_, _, _) ->
 -spec join(emqx_ds:db(), emqx_ds_replication_layer_meta:site(), rest | cli) ->
     {ok, unchanged | [emqx_ds_replication_layer_meta:site()]} | {error, _}.
 join(DB, Site, Via) ->
-    ?SLOG(warning, #{
-        msg => "durable_storage_join_request", ds => DB, site => Site, via => Via
+    ?SLOG(notice, #{
+        msg => "durable_storage_join_request",
+        ds => DB,
+        site => Site,
+        via => Via
     }),
     meta_result_to_binary(emqx_ds_replication_layer_meta:join_db_site(DB, Site)).
 
 -spec leave(emqx_ds:db(), emqx_ds_replication_layer_meta:site(), rest | cli) ->
     {ok, unchanged | [emqx_ds_replication_layer_meta:site()]} | {error, _}.
 leave(DB, Site, Via) ->
-    ?SLOG(warning, #{
-        msg => "durable_storage_leave_request", ds => DB, site => Site, via => Via
+    ?SLOG(notice, #{
+        msg => "durable_storage_leave_request",
+        ds => DB,
+        site => Site,
+        via => Via
     }),
     meta_result_to_binary(emqx_ds_replication_layer_meta:leave_db_site(DB, Site)).
 
@@ -413,7 +422,9 @@ leave(DB, Site, Via) ->
     ok | {error, _}.
 forget(Site, Via) ->
     ?SLOG(warning, #{
-        msg => "durable_storage_forget_request", site => Site, via => Via
+        msg => "durable_storage_forget_request",
+        site => Site,
+        via => Via
     }),
     meta_result_to_binary(emqx_ds_replication_layer_meta:forget_site(Site)).
 
@@ -518,23 +529,35 @@ list_shards(DB) ->
      || Shard <- emqx_ds_replication_layer_meta:shards(DB)
     ].
 
-meta_result_to_binary(Ok) when Ok == ok orelse element(1, Ok) == ok ->
-    Ok;
-meta_result_to_binary({error, {nonexistent_sites, UnknownSites}}) ->
-    Msg = ["Unknown sites: " | lists:join(", ", UnknownSites)],
-    {error, iolist_to_binary(Msg)};
-meta_result_to_binary({error, {nonexistent_db, DB}}) ->
-    IOList = io_lib:format("Unknown storage: ~p", [DB]),
-    {error, iolist_to_binary(IOList)};
-meta_result_to_binary({error, nonexistent_site}) ->
-    {error, <<"Unknown site">>};
-meta_result_to_binary({error, {member_of_replica_sets, DBNames}}) ->
+meta_result_to_binary(ok) ->
+    ok;
+meta_result_to_binary({Result, {member_of_replica_sets, DBNames}}) ->
     DBs = lists:map(fun atom_to_binary/1, DBNames),
     Msg = ["Site is still a member of replica sets of: " | lists:join(", ", DBs)],
-    {error, iolist_to_binary(Msg)};
+    {Result, iolist_to_binary(Msg)};
+meta_result_to_binary({Result, {member_of_target_sets, DBNames}}) ->
+    DBs = lists:map(fun atom_to_binary/1, DBNames),
+    Msg = ["Site is still a target of replica set transitions in: " | lists:join(", ", DBs)],
+    {Result, iolist_to_binary(Msg)};
+meta_result_to_binary({ok, Res}) ->
+    {ok, Res};
 meta_result_to_binary({error, Err}) ->
-    IOList = io_lib:format("Error: ~p", [Err]),
-    {error, iolist_to_binary(IOList)}.
+    {error, meta_error_to_binary(Err)}.
+
+meta_error_to_binary({nonexistent_sites, UnknownSites}) ->
+    iolist_to_binary(["Unknown sites: " | lists:join(", ", UnknownSites)]);
+meta_error_to_binary({nonexistent_db, DB}) ->
+    emqx_utils:format("Unknown storage: ~p", [DB]);
+meta_error_to_binary(nonexistent_site) ->
+    <<"Unknown site">>;
+meta_error_to_binary({too_few_sites, _Sites}) ->
+    <<"Replica sets would become too small">>;
+meta_error_to_binary(site_online) ->
+    <<"Site is online">>;
+meta_error_to_binary(site_temporarily_offline) ->
+    <<"Site is considered temporarily offline">>;
+meta_error_to_binary(Err) ->
+    emqx_utils:format("Error: ~p", [Err]).
 
 is_enabled() ->
     emqx_ds_builtin_raft_sup:which_dbs() =/= {error, inactive}.
