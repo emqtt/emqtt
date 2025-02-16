@@ -42,6 +42,7 @@
 -define(kafka_telemetry_id, kafka_telemetry_id).
 -define(kafka_client_id, kafka_client_id).
 -define(kafka_producers, kafka_producers).
+-define(PROBE_TOPIC_NAME, <<"emqx-connector-connectivity-probe">>).
 
 resource_type() -> kafka_producer.
 
@@ -102,19 +103,16 @@ on_start(InstId, Config) ->
     %% buffering, which won't happen if it's `?status_connecting'.  That would lead to
     %% data loss, since Kafka Producer uses wolff's internal buffering, which is started
     %% only when its producers start.
-    case check_client_connectivity(ClientId) of
+    HealthCheckTopic = maps:get(health_check_topic, Config, ?PROBE_TOPIC_NAME),
+    case check_client_connectivity(InstId, ClientId, HealthCheckTopic) of
         ok ->
-            HealthCheckTopic = maps:get(health_check_topic, Config, undefined),
             ConnectorState = #{
                 client_id => ClientId,
                 health_check_topic => HealthCheckTopic,
                 installed_bridge_v2s => #{}
             },
             {ok, ConnectorState};
-        {error, {find_client, Reason}} ->
-            %% Race condition?  Crash?  We just checked it with `ensure_client'...
-            {error, Reason};
-        {error, {connectivity, Reason}} ->
+        {error, Reason} ->
             {error, Reason}
     end.
 
@@ -162,7 +160,7 @@ create_producers_for_bridge_v2(
     MaxPartitions = maps:get(partitions_limit, KafkaConfig, all_partitions),
     #{name := BridgeName} = emqx_bridge_v2:parse_id(ActionResId),
     IsDryRun = emqx_resource:is_dry_run(ActionResId),
-    ok = check_topic_and_leader_connections(ActionResId, ClientId, MKafkaTopic, MaxPartitions),
+    ok = assert_topic_and_leader_connections(ActionResId, ClientId, MKafkaTopic, MaxPartitions),
     WolffProducerConfig =
         #{replayq_dir := ReplayqDir} = producers_config(
             BridgeType, BridgeName, KafkaConfig, IsDryRun, ActionResId
@@ -598,13 +596,15 @@ on_get_status(
     %% successfully started, and returning `?status_disconnected' will make resource
     %% manager try to restart the producers / connector, thus potentially dropping data
     %% held in wolff producer's replayq.
-    case check_client_connectivity(ClientId) of
+    HealthCheckTopic = maps:get(health_check_topic, State),
+    case check_client_connectivity(ConnResId, ClientId, HealthCheckTopic) of
         ok ->
-            maybe_check_health_check_topic(ConnResId, State);
-        {error, {find_client, _Error}} ->
+            ?status_connected;
+        {error, #{reason := cannot_find_kafka_client}} ->
+            %% Kafka client is starting
             ?status_connecting;
-        {error, {connectivity, Error}} ->
-            {?status_connecting, Error}
+        {error, Reason} ->
+            {?status_connecting, Reason}
     end.
 
 on_get_channel_status(
@@ -624,7 +624,7 @@ on_get_channel_status(
         partitions_limit := MaxPartitions
     } = maps:get(ActionResId, Channels),
     try
-        ok = check_topic_and_leader_connections(ActionResId, ClientId, MKafkaTopic, MaxPartitions),
+        ok = assert_topic_and_leader_connections(ActionResId, ClientId, MKafkaTopic, MaxPartitions),
         ?tp("kafka_producer_action_connected", #{}),
         ?status_connected
     catch
@@ -636,7 +636,7 @@ on_get_channel_status(
             {?status_connecting, {K, E}}
     end.
 
-check_topic_and_leader_connections(ActionResId, ClientId, MKafkaTopic, MaxPartitions) ->
+assert_topic_and_leader_connections(ActionResId, ClientId, MKafkaTopic, MaxPartitions) ->
     case wolff_client_sup:find_client(ClientId) of
         {ok, Pid} ->
             maybe
@@ -662,40 +662,19 @@ check_topic_and_leader_connections(ActionResId, ClientId, MKafkaTopic, MaxPartit
             })
     end.
 
--spec check_client_connectivity(wolff:client_id()) ->
-    ok | {error, {connectivity | find_client, term()}}.
-check_client_connectivity(ClientId) ->
-    case wolff_client_sup:find_client(ClientId) of
-        {ok, Pid} ->
-            case wolff_client:check_connectivity(Pid) of
-                ok ->
-                    ok;
-                {error, Error} ->
-                    {error, {connectivity, Error}}
-            end;
-        {error, Reason} ->
-            {error, {find_client, Reason}}
-    end.
-
-maybe_check_health_check_topic(ConnResId, #{health_check_topic := Topic} = ConnectorState) when
-    is_binary(Topic)
-->
-    #{client_id := ClientId} = ConnectorState,
+-spec check_client_connectivity(binary(), wolff:client_id(), binary()) -> ok | {error, term()}.
+check_client_connectivity(ConnResId, ClientId, HealthCheckTopic) ->
     MaxPartitions = all_partitions,
-    try check_topic_and_leader_connections(ConnResId, ClientId, Topic, MaxPartitions) of
-        ok ->
-            ?status_connected
+    try
+        assert_topic_and_leader_connections(ConnResId, ClientId, HealthCheckTopic, MaxPartitions)
     catch
         throw:{unhealthy_target, Msg} ->
-            {?status_disconnected, Msg};
+            {error, Msg};
         throw:#{reason := {connection_down, _} = Reason} ->
-            {?status_disconnected, Reason};
+            {error, Reason};
         throw:#{reason := Reason} ->
-            {?status_connecting, Reason}
-    end;
-maybe_check_health_check_topic(_ConnResId, _ConnState) ->
-    %% Cannot infer further information.  Maybe upgraded from older version.
-    ?status_connected.
+            {error, Reason}
+    end.
 
 is_alive(Pid) ->
     is_pid(Pid) andalso erlang:is_process_alive(Pid).
@@ -705,6 +684,9 @@ error_summary(Map, [Error]) ->
 error_summary(Map, [Error | More]) ->
     Map#{first_error => Error, total_errors => length(More) + 1}.
 
+check_if_healthy_leaders(_ActionResId, _ClientId, _ClientPid, ?PROBE_TOPIC_NAME, _MaxPartitions) ->
+    %% do not check probe topic leaders
+    ok;
 check_if_healthy_leaders(ActionResId, ClientId, ClientPid, KafkaTopic, MaxPartitions) when
     is_pid(ClientPid)
 ->
@@ -752,6 +734,9 @@ check_if_healthy_leaders(ActionResId, ClientId, ClientPid, KafkaTopic, MaxPartit
 check_topic_status(ClientId, WolffClientPid, KafkaTopic) ->
     case wolff_client:check_topic_exists_with_client_pid(WolffClientPid, KafkaTopic) of
         ok ->
+            ok;
+        {error, unknown_topic_or_partition} when KafkaTopic =:= ?PROBE_TOPIC_NAME ->
+            %% The probing topic is only used to check if metada request can be sent
             ok;
         {error, unknown_topic_or_partition} ->
             Msg = iolist_to_binary([<<"Unknown topic or partition: ">>, KafkaTopic]),

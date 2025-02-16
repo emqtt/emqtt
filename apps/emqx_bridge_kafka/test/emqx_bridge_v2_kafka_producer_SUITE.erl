@@ -777,8 +777,8 @@ t_connector_health_check_topic(_Config) ->
         begin
             %% We create a connector pointing to a broker that expects authentication, but
             %% we don't provide it in the config.
-            %% Without a health check topic, we're unable to probe any topic leaders to
-            %% check the actual connection parameters, so the status is "connected".
+            %% Without a health check topic, a dummy topic name is used to probe
+            %% post-auth connectivity, so the status is "disconnected"
             Type = ?TYPE,
             Name = ?FUNCTION_NAME,
             PlainAuthBootstrapHost = <<"kafka-1.emqx.net:9093">>,
@@ -786,7 +786,7 @@ t_connector_health_check_topic(_Config) ->
                 <<"bootstrap_hosts">> => PlainAuthBootstrapHost
             }),
             ?assertMatch(
-                {ok, {{_, 201, _}, _, #{<<"status">> := <<"connected">>}}},
+                {ok, {{_, 201, _}, _, #{<<"status">> := <<"disconnected">>}}},
                 emqx_bridge_v2_testlib:create_connector_api([
                     {connector_type, Type},
                     {connector_name, Name},
