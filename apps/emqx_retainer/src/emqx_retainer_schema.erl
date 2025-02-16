@@ -178,7 +178,7 @@ fields(flow_control) ->
             )}
     ];
 fields(external_backends) ->
-    emqx_schema_hooks:injection_point('retainer.external_backends').
+    emqx_schema_hooks:list_injection_point('retainer.external_backends').
 
 desc("retainer") ->
     "Configuration related to handling `PUBLISH` packets with a `retain` flag set to 1.";

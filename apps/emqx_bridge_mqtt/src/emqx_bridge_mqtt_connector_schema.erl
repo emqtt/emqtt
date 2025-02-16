@@ -38,6 +38,13 @@
     connector_examples/1
 ]).
 
+%% `emqx_schema_hooks' API
+-export([injected_fields/0]).
+
+-export([
+    unique_static_clientid_validator/1
+]).
+
 -import(emqx_schema, [mk_duration/2]).
 
 -import(hoconsc, [mk/2, ref/2]).
@@ -370,6 +377,45 @@ desc(static_clientid_entry) ->
 desc(_) ->
     undefined.
 
+injected_fields() ->
+    #{
+        'connectors.validators' => [fun ?MODULE:unique_static_clientid_validator/1]
+    }.
+
+unique_static_clientid_validator(#{<<"mqtt">> := MQTTConnectors}) ->
+    StaticClientIdsToNames0 =
+        [
+            {ClientId, Name}
+         || {Name, #{<<"static_clientids">> := CIdMappings}} <- maps:to_list(MQTTConnectors),
+            #{<<"ids">> := ClientIds} <- CIdMappings,
+            ClientId <- ClientIds
+        ],
+    StaticClientIdsToNames =
+        maps:groups_from_list(
+            fun({CId, _Name}) -> CId end,
+            fun({_CId, Name}) -> Name end,
+            StaticClientIdsToNames0
+        ),
+    Duplicated0 = maps:filter(fun(_, Vs) -> length(Vs) > 1 end, StaticClientIdsToNames),
+    Duplicated = maps:values(Duplicated0),
+    case Duplicated of
+        [] ->
+            ok;
+        [_ | _] ->
+            DuplicatedFormatted = format_duplicated_name_groups(Duplicated),
+            Msg =
+                iolist_to_binary(
+                    io_lib:format(
+                        "distinct mqtt connectors must not use the same static clientids;"
+                        " connectors with duplicate static clientids: ~s",
+                        [DuplicatedFormatted]
+                    )
+                ),
+            {error, Msg}
+    end;
+unique_static_clientid_validator(_) ->
+    ok.
+
 qos() ->
     hoconsc:union([emqx_schema:qos(), emqx_schema:template()]).
 
@@ -480,3 +526,14 @@ static_clientid_validate_clientids_length(Ids) ->
         false ->
             ok
     end.
+
+format_duplicated_name_groups(DuplicatedNameGroups) ->
+    lists:join(
+        $;,
+        lists:map(
+            fun(NameGroup) ->
+                lists:join($,, lists:sort(NameGroup))
+            end,
+            DuplicatedNameGroups
+        )
+    ).

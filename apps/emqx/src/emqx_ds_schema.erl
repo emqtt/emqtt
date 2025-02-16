@@ -107,7 +107,7 @@ schema() ->
                 importance => ?IMPORTANCE_MEDIUM,
                 desc => ?DESC(messages)
             })}
-    ] ++ emqx_schema_hooks:injection_point('durable_storage', []).
+    ] ++ emqx_schema_hooks:list_injection_point('durable_storage', []).
 
 db_schema(ExtraOptions) ->
     db_schema(complete, ExtraOptions).
@@ -117,7 +117,7 @@ db_schema(Flavor, ExtraOptions) ->
         default => #{<<"backend">> => ?DEFAULT_BACKEND}
     },
     BuiltinBackends = [backend_ref(Backend, Flavor) || Backend <- ?BUILTIN_BACKENDS],
-    CustomBackends = emqx_schema_hooks:injection_point('durable_storage.backends', []),
+    CustomBackends = emqx_schema_hooks:list_injection_point('durable_storage.backends', []),
     sc(
         hoconsc:union(BuiltinBackends ++ CustomBackends),
         maps:merge(Options, ExtraOptions)

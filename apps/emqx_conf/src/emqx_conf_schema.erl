@@ -295,7 +295,7 @@ fields("cluster") ->
                     importance => ?IMPORTANCE_HIDDEN
                 }
             )}
-    ] ++ emqx_schema_hooks:injection_point(cluster);
+    ] ++ emqx_schema_hooks:list_injection_point(cluster);
 fields(cluster_static) ->
     [
         {"seeds",
@@ -1660,7 +1660,7 @@ address_type(IP) when tuple_size(IP) =:= 4 -> ipv4;
 address_type(IP) when tuple_size(IP) =:= 8 -> ipv6.
 
 node_role_symbols() ->
-    [core] ++ emqx_schema_hooks:injection_point('node.role').
+    [core] ++ emqx_schema_hooks:list_injection_point('node.role').
 
 validate_node_role(Role) ->
     Allowed = node_role_symbols(),

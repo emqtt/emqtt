@@ -90,5 +90,7 @@ shared_subs(ce) ->
     [].
 
 %% Add more schemas here.
-customized(_Edition) ->
-    [].
+customized(ee) ->
+    [emqx_bridge_mqtt_connector_schema];
+customized(ce) ->
+    [emqx_bridge_mqtt_connector_schema].

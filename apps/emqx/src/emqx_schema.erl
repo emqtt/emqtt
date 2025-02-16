@@ -223,7 +223,7 @@ roots(high) ->
             )},
         {zones, zones_field_schema()}
     ] ++
-        emqx_schema_hooks:injection_point(
+        emqx_schema_hooks:list_injection_point(
             'roots.high',
             [
                 %% NOTE: authorization schema here is only to keep emqx app pure
@@ -1904,7 +1904,7 @@ mqtt_listener(Bind) ->
                         default => <<"3s">>
                     }
                 )}
-        ] ++ emqx_schema_hooks:injection_point('mqtt.listener').
+        ] ++ emqx_schema_hooks:list_injection_point('mqtt.listener').
 
 access_rules_converter(AccessRules) ->
     DeepRules =
@@ -2322,7 +2322,7 @@ common_ssl_opts_schema(Defaults, Type) ->
                     desc => ?DESC(common_ssl_opts_schema_hibernate_after)
                 }
             )}
-    ] ++ emqx_schema_hooks:injection_point('common_ssl_opts_schema').
+    ] ++ emqx_schema_hooks:list_injection_point('common_ssl_opts_schema').
 
 %% @doc Make schema for SSL listener options.
 -spec server_ssl_opts_schema(map(), boolean()) -> hocon_schema:field_schema().
