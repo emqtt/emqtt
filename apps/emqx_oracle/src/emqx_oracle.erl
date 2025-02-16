@@ -401,6 +401,7 @@ sql_params_to_str(Params) when is_list(Params) ->
         fun
             (false) -> "0";
             (true) -> "1";
+            (null) -> null;
             (Value) -> emqx_utils_conv:str(Value)
         end,
         Params
@@ -560,6 +561,10 @@ check_if_table_exists(Conn, SQL, Tokens0) ->
                 _ when is_map_key(<<"ORA-01013">>, OraMap) ->
                     % ORA-01013: user requested cancel of current operation
                     % This error is returned when the query is canceled by the user.
+                    ok;
+                _ when is_map_key(<<"ORA-12899">>, OraMap) ->
+                    % ORA-12899: value too large for column
+                    % This error is returned when the value is too large for the column.
                     ok;
                 _ ->
                     {error, Description}
