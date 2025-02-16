@@ -156,9 +156,45 @@ t_format(_Config) ->
     } = emqx_alarm:format(Deactivate),
     ok.
 
+%% Checks that we run hooks in a separate process, so the main one doesn't hang.
+t_async_hooks(_Config) ->
+    %% Hang for more than the call timeout
+    TestPid = self(),
+    emqx_hooks:add('alarm.activated', {?MODULE, hang_hook, [activated, TestPid]}, 1_000),
+    emqx_hooks:add('alarm.deactivated', {?MODULE, hang_hook, [deactivated, TestPid]}, 1_000),
+    %% Shouldn't exit with timeout
+    ok = emqx_alarm:activate(a, #{msg => "aaa"}, <<"Boom">>),
+    ok = emqx_alarm:deactivate(a, #{msg => "aaa"}, <<"Boom">>),
+    HooksCalled = receive_hooks(2, 15_000),
+    ?assertMatch([{activated, _}, {deactivated, _}], HooksCalled),
+    ok.
+
+hang_hook(Context, Kind, TestPid) ->
+    TestPid ! {hook_called, Kind, Context},
+    CallTimeout = 5_000,
+    ct:sleep(CallTimeout + 500),
+    ok.
+
 get_alarm(Name, [Alarm = #{name := Name} | _More]) ->
     Alarm;
 get_alarm(Name, [_Alarm | More]) ->
     get_alarm(Name, More);
 get_alarm(_Name, []) ->
     {error, not_found}.
+
+receive_hooks(Count, Timeout) ->
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
+    receive_hooks_loop(Count, Deadline).
+
+receive_hooks_loop(0, _Deadline) ->
+    [];
+receive_hooks_loop(Count, Deadline) ->
+    Timeout = max(0, Deadline - erlang:monotonic_time(millisecond)),
+    receive
+        {hook_called, Kind, Context} ->
+            [{Kind, Context} | receive_hooks_loop(Count - 1, Deadline)];
+        _ ->
+            receive_hooks_loop(Count, Deadline)
+    after Timeout ->
+        []
+    end.

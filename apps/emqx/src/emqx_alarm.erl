@@ -50,13 +50,17 @@
     handle_call/3,
     handle_cast/2,
     handle_info/2,
-    terminate/2,
-    code_change/3
+    terminate/2
 ]).
 
 %% Internal exports (RPC)
 -export([
     do_get_alarms/0
+]).
+
+%% Internal exports
+-export([
+    do_start_worker/0
 ]).
 
 -record(activated_alarm, {
@@ -73,6 +77,10 @@
     message :: binary(),
     deactivate_at :: integer() | infinity
 }).
+
+-define(worker, worker).
+
+-record(work, {mod :: module(), fn :: atom(), args :: [term()]}).
 
 -ifdef(TEST).
 -compile(export_all).
@@ -220,12 +228,14 @@ to_rfc3339(Timestamp) ->
 init([]) ->
     ok = mria:wait_for_tables([?ACTIVATED_ALARM, ?DEACTIVATED_ALARM, ?TRIE]),
     deactivate_all_alarms(),
-    {ok, #{}, get_validity_period()}.
+    process_flag(trap_exit, true),
+    State = #{?worker => start_worker()},
+    {ok, State, get_validity_period()}.
 
 handle_call({activate_alarm, Name, Details, Message}, _From, State) ->
     case create_activate_alarm(Name, Details, Message) of
         {ok, Alarm} ->
-            do_actions(activate, Alarm, emqx:get_config([alarm, actions])),
+            do_actions(activate, Alarm, emqx:get_config([alarm, actions]), State),
             {reply, ok, State, get_validity_period()};
         Err ->
             {reply, Err, State, get_validity_period()}
@@ -235,7 +245,7 @@ handle_call({deactivate_alarm, Name, Details, Message}, _From, State) ->
         [] ->
             {reply, {error, not_found}, State};
         [Alarm] ->
-            deactivate_alarm(Alarm, Details, Message),
+            deactivate_alarm(Alarm, Details, Message, State),
             {reply, ok, State, get_validity_period()}
     end;
 handle_call(delete_all_deactivated_alarms, _From, State) ->
@@ -265,15 +275,15 @@ handle_info(timeout, State) ->
     Period = get_validity_period(),
     delete_expired_deactivated_alarms(erlang:system_time(microsecond) - Period * 1000),
     {noreply, State, Period};
+handle_info({'EXIT', Worker, _}, #{?worker := Worker} = State0) ->
+    State = State0#{?worker := start_worker()},
+    {noreply, State};
 handle_info(Info, State) ->
     ?SLOG(error, #{msg => "unexpected_info", info_req => Info}),
     {noreply, State, get_validity_period()}.
 
 terminate(_Reason, _State) ->
     ok.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
 
 %%------------------------------------------------------------------------------
 %% Internal functions
@@ -313,7 +323,8 @@ deactivate_alarm(
         message = Msg0
     },
     Details,
-    Message
+    Message,
+    State
 ) ->
     SizeLimit = emqx:get_config([alarm, size_limit]),
     case SizeLimit > 0 andalso (mnesia:table_info(?DEACTIVATED_ALARM, size) >= SizeLimit) of
@@ -342,7 +353,7 @@ deactivate_alarm(
     ),
     mria:dirty_write(?DEACTIVATED_ALARM, HistoryAlarm),
     mria:dirty_delete(?ACTIVATED_ALARM, Name),
-    do_actions(deactivate, DeActAlarm, emqx:get_config([alarm, actions])).
+    do_actions(deactivate, DeActAlarm, emqx:get_config([alarm, actions]), State).
 
 make_deactivated_alarm(ActivateAt, Name, Details, Message, DeActivateAt) ->
     #deactivated_alarm{
@@ -406,22 +417,22 @@ delete_expired_deactivated_alarms(ActivatedAt, Checkpoint) ->
             ok
     end.
 
-do_actions(_, _, []) ->
+do_actions(_, _, [], _State) ->
     ok;
-do_actions(activate, Alarm = #activated_alarm{name = Name, message = Message}, [log | More]) ->
+do_actions(activate, Alarm = #activated_alarm{name = Name, message = Message}, [log | More], State) ->
     ?SLOG(warning, #{
         msg => "alarm_is_activated",
         name => Name,
         message => Message
     }),
-    do_actions(activate, Alarm, More);
-do_actions(deactivate, Alarm = #deactivated_alarm{name = Name}, [log | More]) ->
+    do_actions(activate, Alarm, More, State);
+do_actions(deactivate, Alarm = #deactivated_alarm{name = Name}, [log | More], State) ->
     ?SLOG(warning, #{
         msg => "alarm_is_deactivated",
         name => Name
     }),
-    do_actions(deactivate, Alarm, More);
-do_actions(Operation, Alarm, [publish | More]) ->
+    do_actions(deactivate, Alarm, More, State);
+do_actions(Operation, Alarm, [publish | More], State) ->
     Topic = topic(Operation),
     NormalizedAlarm = normalize(Alarm),
     {ok, Payload} = emqx_utils_json:safe_encode(NormalizedAlarm),
@@ -435,15 +446,26 @@ do_actions(Operation, Alarm, [publish | More]) ->
     ),
     _ = emqx_broker:safe_publish(Message),
     _ =
+        %% We run hooks in a temporary process to avoid blocking the alarm process for long.
         case Operation of
             activate ->
                 ActivatedAlarmContext = to_activated_alarm_context(NormalizedAlarm),
-                emqx_hooks:run('alarm.activated', [ActivatedAlarmContext]);
+                send_job_to_worker(
+                    emqx_hooks,
+                    run,
+                    ['alarm.activated', [ActivatedAlarmContext]],
+                    State
+                );
             deactivate ->
                 DeactivatedAlarmContext = to_deactivated_alarm_context(NormalizedAlarm),
-                emqx_hooks:run('alarm.deactivated', [DeactivatedAlarmContext])
+                send_job_to_worker(
+                    emqx_hooks,
+                    run,
+                    ['alarm.deactivated', [DeactivatedAlarmContext]],
+                    State
+                )
         end,
-    do_actions(Operation, Alarm, More).
+    do_actions(Operation, Alarm, More, State).
 
 topic(activate) ->
     emqx_topic:systop(<<"alarms/activate">>);
@@ -510,4 +532,33 @@ safe_call(Req) ->
                 stacktrace => St
             }),
             {error, Reason}
+    end.
+
+start_worker() ->
+    proc_lib:start_link(?MODULE, do_start_worker, []).
+
+do_start_worker() ->
+    ok = proc_lib:init_ack(self()),
+    worker_loop().
+
+send_job_to_worker(Mod, Fn, Args, State0) ->
+    #{?worker := WorkerPid} = State0,
+    WorkerPid ! #work{mod = Mod, fn = Fn, args = Args},
+    ok.
+
+worker_loop() ->
+    receive
+        #work{mod = Mod, fn = Fn, args = Args} ->
+            try
+                apply(Mod, Fn, Args)
+            catch
+                Kind:Error:Stacktrace ->
+                    ?SLOG(warning, #{
+                        msg => "alarm_failed_to_run_job",
+                        mfa => {Mod, Fn, Args},
+                        reason => {Kind, Error},
+                        stacktrace => Stacktrace
+                    })
+            end,
+            worker_loop()
     end.
