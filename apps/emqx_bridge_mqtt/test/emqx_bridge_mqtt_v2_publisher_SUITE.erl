@@ -162,6 +162,7 @@ connector_config(Overrides) ->
         <<"description">> => <<"my connector">>,
         <<"pool_size">> => 3,
         <<"proto_ver">> => <<"v5">>,
+        <<"clean_start">> => true,
         <<"server">> => <<"127.0.0.1:1883">>,
         <<"resource_opts">> => #{
             <<"health_check_interval">> => <<"1s">>,
@@ -550,5 +551,88 @@ t_reconnect(Config) ->
             ok
         end,
         []
+    ),
+    ok.
+
+%% Checks the race condition where the action is deemed healthy, but the MQTT client has
+%% concurrently been disconnected (and, due to a race, `emqtt' gets either a `{error,
+%% closed}' or `{error, tcp_closed}' error message).  We should retry.
+t_publish_while_tcp_closed_concurrently(Config) ->
+    PoolSize = 3,
+    ?check_trace(
+        begin
+            ?force_ordering(
+                #{?snk_kind := call_query_enter},
+                #{?snk_kind := "kill_clients", ?snk_span := start}
+            ),
+            ?force_ordering(
+                #{?snk_kind := "kill_clients", ?snk_span := {complete, _}},
+                #{?snk_kind := "mqtt_action_about_to_publish"}
+            ),
+
+            TestClientid = <<"testclientid">>,
+
+            spawn_link(fun() ->
+                ?tp_span(
+                    "kill_clients",
+                    #{},
+                    begin
+                        ClientIds0 = [_, _ | _] = emqx_cm:all_client_ids(),
+                        ChanPids0 = [_, _ | _] = emqx_cm:all_channels(),
+                        ClientidsChanPids0 = lists:zip(ClientIds0, ChanPids0),
+                        ClientidsChanPids = lists:filter(
+                            fun({CId, _Pid}) ->
+                                CId /= TestClientid
+                            end,
+                            ClientidsChanPids0
+                        ),
+                        {ClientidsToKick, ChanPids} = lists:unzip(ClientidsChanPids),
+                        lists:foreach(fun(Pid) -> monitor(process, Pid) end, ChanPids),
+                        ct:pal("kicking ~p", [ClientidsToKick]),
+                        %% Forcefully kill connection processes, so we get the ellusive `tcp_closed'
+                        %% error more easily from `emqtt'.
+                        lists:foreach(fun(ChanPid) -> ChanPid ! die_if_test end, ChanPids),
+                        _DownPids = emqx_utils:drain_down(PoolSize),
+
+                        ok
+                    end
+                )
+            end),
+
+            {201, _} = create_connector_api(Config, #{
+                %% Should usually be `true', but we allow `false', despite the potential
+                %% issues with duplication of messages and loss of client state.
+                <<"clean_start">> => false,
+                <<"pool_size">> => PoolSize,
+                <<"resource_opts">> => #{<<"health_check_interval">> => <<"15s">>}
+            }),
+            {201, #{<<"parameters">> := #{<<"topic">> := RemoteTopic}}} =
+                create_action_api(
+                    Config,
+                    #{
+                        <<"parameters">> => #{<<"qos">> => ?QOS_2},
+                        <<"resource_opts">> => #{<<"health_check_interval">> => <<"15s">>}
+                    }
+                ),
+
+            RuleTopic = <<"rule/republish">>,
+            {ok, _} = create_rule_and_action_http(Config, RuleTopic, #{}),
+
+            {ok, C} = emqtt:start_link(#{proto_ver => v5, clientid => TestClientid}),
+            {ok, _} = emqtt:connect(C),
+            on_exit(fun() -> emqtt:stop(C) end),
+            {ok, _, [?RC_GRANTED_QOS_2]} = emqtt:subscribe(C, RemoteTopic, [{qos, ?QOS_2}]),
+
+            {ok, _} = emqtt:publish(C, RuleTopic, <<"hey">>, [{qos, ?QOS_2}]),
+
+            ?assertReceive({publish, #{topic := RemoteTopic}}, 5_000),
+
+            ok
+        end,
+        fun(Trace) ->
+            %% Connection being closed forcefully should induce a retry
+            ?assertMatch([_ | _], ?of_kind(buffer_worker_retry_inflight, Trace)),
+            ok
+        end
     ),
     ok.

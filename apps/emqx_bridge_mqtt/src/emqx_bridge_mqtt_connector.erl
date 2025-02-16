@@ -407,6 +407,10 @@ handle_send_result({ok, Reply}) ->
 handle_send_result({error, Reason}) ->
     {error, classify_error(Reason)}.
 
+classify_reply(Reply = #{reason_code := ?RC_PACKET_IDENTIFIER_IN_USE}) ->
+    %% If `emqtt' client restarted, it may re-use packet ids that the remote broker still
+    %% has memory of.  We should retry.
+    {recoverable_error, Reply};
 classify_reply(Reply = #{reason_code := _}) ->
     {unrecoverable_error, Reply}.
 
@@ -419,6 +423,12 @@ classify_error({disconnected, _RC, _} = Reason) ->
 classify_error({shutdown, _} = Reason) ->
     {recoverable_error, Reason};
 classify_error(shutdown = Reason) ->
+    {recoverable_error, Reason};
+classify_error(closed = Reason) ->
+    {recoverable_error, Reason};
+classify_error(tcp_closed = Reason) ->
+    {recoverable_error, Reason};
+classify_error(einval = Reason) ->
     {recoverable_error, Reason};
 classify_error({unrecoverable_error, _Reason} = Error) ->
     Error;
